@@ -1,0 +1,22 @@
+[package]
+name = "serenity-commands-macros"
+
+authors.workspace = true
+edition.workspace = true
+homepage.workspace = true
+license.workspace = true
+readme.workspace = true
+repository.workspace = true
+version.workspace = true
+
+[lib]
+proc-macro = true
+
+[dependencies]
+darling = "0.20"
+proc-macro2 = "1"
+quote = "1"
+syn = "2"
+
+[lints]
+workspace = true
