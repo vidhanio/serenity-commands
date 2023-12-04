@@ -1,6 +1,6 @@
 #![cfg_attr(docsrs, feature(doc_auto_cfg))]
 //! A library for intuitively creating commands for use with the [`serenity`]
-//! Discord bot library.
+//! Discord library.
 
 use serenity::all::{
     AttachmentId, ChannelId, CommandDataOption, CommandDataOptionValue, CommandOptionType,

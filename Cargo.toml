@@ -2,6 +2,7 @@
 name = "serenity-commands"
 
 authors.workspace = true
+description.workspace = true
 edition.workspace = true
 homepage.workspace = true
 license.workspace = true
@@ -38,6 +39,7 @@ members = [".", "macros"]
 
     [workspace.package]
     authors = ["Vidhan Bhatt <me@vidhan.io>"]
+    description = "A library for intuitively creating commands for use with the Serenity Discord library."
     edition = "2021"
     homepage = "https://github.com/vidhanio/serenity-commands"
     license = "MIT"
