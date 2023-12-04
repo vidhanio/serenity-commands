@@ -1,6 +1,77 @@
 #![cfg_attr(docsrs, feature(doc_auto_cfg))]
-//! A library for intuitively creating commands for use with the [`serenity`]
-//! Discord library.
+//! A set of traits/derive macros for intuitively creating and parsing
+//! application commands from [`serenity`].
+//!
+//! # Examples
+//!
+//! ```rust
+//! use serenity::all::{async_trait, Context, EventHandler, Interaction, Ready};
+//! use serenity_commands::{Command, CommandData, CommandOption};
+//!
+//! #[derive(Debug, CommandData)]
+//! enum AllCommands {
+//!     /// Ping the bot.
+//!     Ping,
+//!
+//!     /// Echo a message.
+//!     Echo {
+//!         /// The message to echo.
+//!         message: String,
+//!     },
+//!
+//!     /// Math operations.
+//!     MathCommand(MathCommand),
+//! }
+//!
+//! #[derive(Debug, Command)]
+//! enum MathCommand {
+//!     /// Add two numbers.
+//!     Add(BinaryOperation),
+//!
+//!     /// Subtract two numbers.
+//!     Subtract(BinaryOperation),
+//!
+//!     /// Negate a number.
+//!     Negate {
+//!         /// The number to negate.
+//!         a: i32,
+//!     },
+//!
+//!     /// Raise a number to a power.
+//!     Power {
+//!         /// The number to raise.
+//!         a: i32,
+//!
+//!         /// The power to raise to.
+//!         b: i32,
+//!     },
+//! }
+//!
+//! #[derive(Debug, CommandOption)]
+//! struct BinaryOperation {
+//!     /// The first number.
+//!     a: i32,
+//!
+//!     /// The second number.
+//!     b: i32,
+//! }
+//!
+//! struct Handler;
+//!
+//! #[async_trait]
+//! impl EventHandler for Handler {
+//!     async fn ready(&self, ctx: Context, ready: Ready) {
+//!         serenity::all::Command::set_global_commands(&ctx, AllCommands::to_command_data()).await.unwrap();
+//!     }
+//!
+//!     async fn interaction_create(&self, ctx: Context, interaction: Interaction) {
+//!         if let Interaction::Command(command) = interaction {
+//!             let data = AllCommands::from_command_data(&command.data).unwrap();
+//!             println!("{data:#?}");
+//!         }
+//!     }
+//! }
+//! ```
 
 use serenity::all::{
     AttachmentId, ChannelId, CommandDataOption, CommandDataOptionValue, CommandOptionType,
@@ -100,8 +171,8 @@ pub use serenity_commands_macros::Command;
 /// Derive the [`CommandData`] trait.
 ///
 /// This creates a top-level utility structure which can list all of its
-/// commands (for use with [`GuildId::set_commands`], etc.) and extract data
-/// from [`CommandInteraction`]s.
+/// commands (for use with [`Command::set_global_commands`], etc.) and extract
+/// data from [`CommandInteraction`]s.
 ///
 /// This macro only supports `enum`s, as it is intended to select from one of
 /// many commands.
@@ -138,7 +209,7 @@ pub use serenity_commands_macros::Command;
 /// }
 /// ```
 ///
-/// [`GuildId::set_commands`]: serenity::all::GuildId::set_commands
+/// [`Command::set_global_commands`]: serenity::all::Command::set_global_commands
 /// [`CommandInteraction`]: serenity::all::CommandInteraction
 pub use serenity_commands_macros::CommandData;
 /// Derive the [`CommandOption`] trait.
@@ -243,7 +314,10 @@ pub use serenity_commands_macros::CommandData;
 pub use serenity_commands_macros::CommandOption;
 use thiserror::Error;
 
-/// A type alias for [`Result`]s which use [`Error`] as the error type.
+/// A type alias for [`std::result::Result`]s which use [`Error`] as the error
+/// type.
+///
+/// [`Error`]: enum@Error
 pub type Result<T> = std::result::Result<T, Error>;
 
 /// An error which can occur when extracting data from a command interaction.
@@ -287,10 +361,10 @@ pub enum Error {
 }
 
 /// A top-level utility structure which can list all of its commands (for use
-/// with [`GuildId::set_commands`], etc.) and extract data from
+/// with [`Command::set_global_commands`], etc.) and extract data from
 /// [`CommandInteraction`]s.
 ///
-/// [`GuildId::set_commands`]: serenity::all::GuildId::set_commands
+/// [`Command::set_global_commands`]: serenity::all::Command::set_global_commands
 /// [`CommandInteraction`]: serenity::all::CommandInteraction
 pub trait CommandData: Sized {
     /// List all of the commands that this type represents.

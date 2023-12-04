@@ -1173,7 +1173,7 @@ dependencies = [
 
 [[package]]
 name = "serenity-commands"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "serenity",
  "serenity-commands-macros",
@@ -1183,7 +1183,7 @@ dependencies = [
 
 [[package]]
 name = "serenity-commands-macros"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "darling",
  "proc-macro2",
