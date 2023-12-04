@@ -247,7 +247,7 @@ use thiserror::Error;
 pub type Result<T> = std::result::Result<T, Error>;
 
 /// An error which can occur when extracting data from a command interaction.
-#[derive(Debug, Clone, Error)]
+#[derive(Debug, Error)]
 pub enum Error {
     /// An unknown command was provided.
     #[error("unknown command: {0}")]
@@ -280,6 +280,10 @@ pub enum Error {
     /// A required command option was not provided.
     #[error("required command option not provided")]
     MissingRequiredCommandOption,
+
+    /// An error occurred within a custom implementation.
+    #[error(transparent)]
+    Custom(#[from] Box<dyn std::error::Error + Send + Sync>),
 }
 
 /// A top-level utility structure which can list all of its commands (for use
