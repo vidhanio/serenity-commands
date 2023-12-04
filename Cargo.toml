@@ -48,7 +48,7 @@ members = [".", "macros"]
     version = "0.1.0"
 
     [workspace.dependencies]
-    serenity-commands-macros = { path = "macros" }
+    serenity-commands-macros = { version = "0.1", path = "macros" }
 
     serenity = { version = "0.12", default-features = false, features = [
         "builder",
