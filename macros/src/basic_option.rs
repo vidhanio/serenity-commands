@@ -103,7 +103,11 @@ impl Args {
 
                 match #choice_expr {
                     #(#arms)*
-                    _ => ::std::result::Result::Err(::serenity_commands::Error::UnknownChoice),
+                    unknown => ::std::result::Result::Err(
+                        ::serenity_commands::Error::UnknownChoice(
+                            ::std::string::ToString::to_string(unknown)
+                        )
+                    )
                 }
             }
         }

@@ -315,8 +315,8 @@ pub enum Error {
     MissingRequiredCommandOption,
 
     /// An unknown choice was provided.
-    #[error("unknown choice")]
-    UnknownChoice,
+    #[error("unknown choice: {0}")]
+    UnknownChoice(String),
 
     /// An error occurred within a custom implementation.
     #[error(transparent)]
