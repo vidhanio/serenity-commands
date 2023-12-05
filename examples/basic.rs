@@ -1,16 +1,13 @@
 #![allow(missing_docs, dead_code)]
 
-use serenity::{
-    all::{GatewayIntents, GuildId, Interaction},
-    async_trait,
-    builder::{CreateInteractionResponse, CreateInteractionResponseMessage},
-    client::{Context, EventHandler},
-    Client,
+use serenity::all::{
+    async_trait, Client, Context, CreateInteractionResponse, CreateInteractionResponseMessage,
+    EventHandler, GatewayIntents, GuildId, Interaction,
 };
-use serenity_commands::{Command, CommandData, CommandOption};
+use serenity_commands::{Command, Commands, SubCommand};
 
-#[derive(Debug, CommandData)]
-enum Commands {
+#[derive(Debug, Commands)]
+enum AllCommands {
     /// Ping the bot.
     Ping,
 
@@ -22,64 +19,58 @@ enum Commands {
 
     /// Perform math operations.
     Math(MathCommand),
+}
 
-    /// one or two numbers.
-    OneOrTwo(OneOrTwo),
-
-    /// Miscaellaneaous commands.
-    Misc(MiscCommands),
+impl AllCommands {
+    fn run(self) -> String {
+        match self {
+            Self::Ping => "Pong!".to_string(),
+            Self::Echo { message } => message,
+            Self::Math(math) => math.run().to_string(),
+        }
+    }
 }
 
 #[derive(Debug, Command)]
 enum MathCommand {
     /// Add two numbers.
-    Add {
-        /// The first number.
-        first: f64,
-
-        /// The second number.
-        second: f64,
-    },
+    Add(BinaryOperation),
 
     /// Subtract two numbers.
-    Subtract(SubtractCommandOption),
+    Subtract(BinaryOperation),
+
+    /// Multiply two numbers.
+    Multiply(BinaryOperation),
+
+    /// Divide two numbers.
+    Divide(BinaryOperation),
+
+    /// Negate a number.
+    Negate {
+        /// The number to negate.
+        a: f64,
+    },
 }
 
-#[derive(Debug, CommandOption)]
-struct SubtractCommandOption {
+impl MathCommand {
+    fn run(self) -> f64 {
+        match self {
+            Self::Add(BinaryOperation { a, b }) => a + b,
+            Self::Subtract(BinaryOperation { a, b }) => a - b,
+            Self::Multiply(BinaryOperation { a, b }) => a * b,
+            Self::Divide(BinaryOperation { a, b }) => a / b,
+            Self::Negate { a } => -a,
+        }
+    }
+}
+
+#[derive(Debug, SubCommand)]
+struct BinaryOperation {
     /// The first number.
-    first: f64,
+    a: f64,
 
     /// The second number.
-    second: f64,
-}
-
-#[derive(Debug, Command)]
-enum MiscCommands {
-    /// Get the current time.
-    Time,
-
-    /// one or two numbers... inside misc!
-    OneOrTwo(OneOrTwo),
-    // /// deeper misc commands
-    // Deeper(DeeperMiscCommands), DOES NOT COMPILE! nesting 3 levels deep is not supported by the
-    // discord API, and thus this crate prevents it.
-}
-
-#[derive(Debug, Command)]
-enum DeeperMiscCommands {
-    /// how??
-    How,
-}
-
-// usable at the top level or as a subcommand!
-#[derive(Debug, Command, CommandOption)]
-struct OneOrTwo {
-    /// The first number.
-    first: f64,
-
-    /// The second number, optional.
-    second: Option<f64>,
+    b: f64,
 }
 
 struct Handler {
@@ -90,20 +81,19 @@ struct Handler {
 impl EventHandler for Handler {
     async fn ready(&self, ctx: Context, _: serenity::model::gateway::Ready) {
         self.guild_id
-            .set_commands(&ctx, Commands::to_command_data())
+            .set_commands(&ctx, AllCommands::create_commands())
             .await
             .unwrap();
     }
 
     async fn interaction_create(&self, ctx: Context, interaction: Interaction) {
         if let Interaction::Command(command) = interaction {
-            let command_data = Commands::from_command_data(&command.data).unwrap();
+            let command_data = AllCommands::from_command_data(&command.data).unwrap();
             command
                 .create_response(
                     ctx,
                     CreateInteractionResponse::Message(
-                        CreateInteractionResponseMessage::new()
-                            .content(format!("```rs\n{command_data:?}```")),
+                        CreateInteractionResponseMessage::new().content(command_data.run()),
                     ),
                 )
                 .await

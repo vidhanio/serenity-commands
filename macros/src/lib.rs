@@ -3,9 +3,11 @@
 //!
 //! An implementation detail. Do not use directly.
 
+mod basic_option;
 mod command;
-mod command_data;
-mod command_option;
+mod commands;
+mod sub_command;
+mod sub_command_group;
 
 use std::iter;
 
@@ -15,8 +17,9 @@ use darling::{
     util::SpannedValue,
     Error, FromDeriveInput, FromField, FromVariant,
 };
+use heck::ToKebabCase;
 use proc_macro2::{Span, TokenStream};
-use quote::{quote, quote_spanned, ToTokens};
+use quote::{quote, ToTokens};
 use syn::{
     parse_macro_input, spanned::Spanned, Attribute, Expr, ExprLit, Ident, Index, Lit, LitStr, Meta,
     MetaNameValue, Type,
@@ -34,16 +37,51 @@ struct Variant {
 
 impl Variant {
     fn name(&self) -> LitStr {
-        generate_command_name(&self.ident, self.name.as_ref())
+        option_name(&self.ident, self.name.as_ref())
     }
 
-    fn to(&self, allow_subcmd_groups: bool, acc: &mut Accumulator) -> TokenStream {
+    fn create_command(&self, acc: &mut Accumulator) -> TokenStream {
         let name = self.name();
         let description = documentation_string(&self.attrs, &self.ident, acc);
 
         match self.fields.style {
             Style::Struct => {
-                let fields = self.fields.iter().map(|field| field.to(acc));
+                let fields = self.fields.iter().map(|field| field.create_option(acc));
+
+                quote! {
+                    ::serenity::all::CreateCommand::new(#name)
+                        .description(#description)
+                        .set_options(::std::vec![#(#fields),*])
+                }
+            }
+            Style::Tuple => {
+                let field = self
+                    .fields
+                    .fields
+                    .first()
+                    .expect("`Args` should only accept tuple `enum` variants with one field");
+                let ty = &field.ty;
+
+                quote! {
+                    <#ty as ::serenity_commands::Command>::create_command(#name, #description)
+                }
+            }
+            Style::Unit => {
+                quote! {
+                    ::serenity::all::CreateCommand::new(#name)
+                        .description(#description)
+                }
+            }
+        }
+    }
+
+    fn create_sub_command_or_group(&self, acc: &mut Accumulator) -> TokenStream {
+        let name = self.name();
+        let description = documentation_string(&self.attrs, &self.ident, acc);
+
+        match self.fields.style {
+            Style::Struct => {
+                let fields = self.fields.iter().map(|field| field.create_option(acc));
 
                 quote! {
                     ::serenity::all::CreateCommandOption::new(
@@ -62,39 +100,11 @@ impl Variant {
                     .expect("`Args` should only accept tuple `enum` variants with one field");
                 let ty = &field.ty;
 
-                let assertion = if allow_subcmd_groups {
-                    quote_spanned! {self.ident.span()=>
-                        const _: () = {
-                            if !::std::matches!(
-                                <#ty as ::serenity_commands::CommandOption>::TYPE,
-                                ::serenity::all::CommandOptionType::SubCommand | ::serenity::all::CommandOptionType::SubCommandGroup
-                            ) {
-                                ::std::panic!(::std::concat!(
-                                    "newtype variant of a `SubCommandGroup` must be of type `SubCommand` or `SubCommandGroup`",
-                                ))
-                            }
-                        };
-                    }
-                } else {
-                    quote_spanned! {self.ident.span()=>
-                        const _: () = {
-                            if !::std::matches!(
-                                <#ty as ::serenity_commands::CommandOption>::TYPE,
-                                ::serenity::all::CommandOptionType::SubCommand,
-                            ) {
-                                ::std::panic!(::std::concat!(
-                                    "newtype variant of a `SubCommandGroup` must be of type `SubCommand`",
-                                ))
-                            }
-                        };
-                    }
-                };
-
                 quote! {
-                    {
-                        #assertion
-                        <#ty as ::serenity_commands::CommandOption>::to_option(#name, #description)
-                    }
+                    <#ty as ::serenity_commands::SubCommandGroup>::create_option(
+                        #name,
+                        #description,
+                    )
                 }
             }
             Style::Unit => {
@@ -109,18 +119,21 @@ impl Variant {
         }
     }
 
-    fn to_data(&self, acc: &mut Accumulator) -> TokenStream {
+    fn create_sub_command(&self, acc: &mut Accumulator) -> TokenStream {
         let name = self.name();
         let description = documentation_string(&self.attrs, &self.ident, acc);
 
         match self.fields.style {
             Style::Struct => {
-                let fields = self.fields.iter().map(|field| field.to(acc));
+                let fields = self.fields.iter().map(|field| field.create_option(acc));
 
                 quote! {
-                    ::serenity::all::CreateCommand::new(#name)
-                        .description(#description)
-                        .set_options(::std::vec![#(#fields),*])
+                    ::serenity::all::CreateCommandOption::new(
+                        ::serenity::all::CommandOptionType::SubCommand,
+                        #name,
+                        #description,
+                    )
+                    #(.add_sub_option(#fields))*
                 }
             }
             Style::Tuple => {
@@ -132,40 +145,75 @@ impl Variant {
                 let ty = &field.ty;
 
                 quote! {
-                    {
-                        <#ty as ::serenity_commands::Command>::to_command(#name, #description)
-                    }
+                    <#ty as ::serenity_commands::SubCommand>::create_option(
+                        #name,
+                        #description,
+                    )
                 }
             }
             Style::Unit => {
                 quote! {
-                    ::serenity::all::CreateCommand::new(#name)
-                        .description(#description)
+                    ::serenity::all::CreateCommandOption::new(
+                        ::serenity::all::CommandOptionType::SubCommand,
+                        #name,
+                        #description,
+                    )
                 }
             }
         }
     }
 
-    fn from(&self) -> TokenStream {
+    #[allow(clippy::wrong_self_convention)]
+    fn from_command_options(&self) -> TokenStream {
         let ident = &self.ident;
-        let name = self.name();
 
         let match_body = match self.fields.style {
             Style::Struct => {
-                let arms = self
-                    .fields
-                    .iter()
-                    .enumerate()
-                    .map(|(idx, field)| field.from_match_arm(&idx.into()));
+                let (fold, field_init) = Field::from_options(&self.fields.fields);
 
-                let inits =
-                    iter::repeat(quote!(::std::option::Option::None)).take(self.fields.len());
+                quote! {
+                    #fold
 
-                let field_init = self
+                    ::std::result::Result::Ok(Self::#ident {
+                        #(#field_init),*
+                    })
+                }
+            }
+            Style::Tuple => {
+                let field = self
                     .fields
-                    .iter()
-                    .enumerate()
-                    .map(|(idx, field)| field.from_field_init(&idx.into()));
+                    .fields
+                    .first()
+                    .expect("`Args` should only accept tuple `enum` variants with one field");
+                let ty = &field.ty;
+
+                quote! {
+                    <#ty as ::serenity_commands::Command>::from_options(
+                        options
+                    ).map(Self::#ident)
+                }
+            }
+            Style::Unit => {
+                quote! {
+                    ::std::result::Result::Ok(Self::#ident)
+                }
+            }
+        };
+
+        let name = self.name();
+
+        quote! {
+            #name => { #match_body }
+        }
+    }
+
+    #[allow(clippy::wrong_self_convention)]
+    fn from_subcommand_or_group_value(&self) -> TokenStream {
+        let ident = &self.ident;
+
+        let match_body = match self.fields.style {
+            Style::Struct => {
+                let (fold, field_init) = Field::from_options(&self.fields.fields);
 
                 quote! {
                     let ::serenity::all::CommandDataOption {
@@ -178,18 +226,7 @@ impl Variant {
                         });
                     };
 
-                    let acc = ::std::iter::Iterator::fold(
-                        options.iter(),
-                        (#(#inits,)*),
-                        |mut acc, option| {
-                            match option.name.as_str() {
-                                #(#arms,)*
-                                _ => {}
-                            }
-
-                            acc
-                        }
-                    );
+                    #fold
 
                     ::std::result::Result::Ok(Self::#ident {
                         #(#field_init),*
@@ -205,8 +242,8 @@ impl Variant {
                 let ty = &field.ty;
 
                 quote! {
-                    <#ty as ::serenity_commands::CommandOption>::from_option(
-                        ::std::option::Option::Some(&option.value)
+                    <#ty as ::serenity_commands::SubCommandGroup>::from_value(
+                        &option.value
                     ).map(Self::#ident)
                 }
             }
@@ -216,6 +253,8 @@ impl Variant {
                 }
             }
         };
+
+        let name = self.name();
 
         quote! {
             #name => { #match_body }
@@ -223,40 +262,25 @@ impl Variant {
     }
 
     #[allow(clippy::wrong_self_convention)]
-    fn from_data(&self) -> TokenStream {
+    fn from_subcommand_value(&self) -> TokenStream {
         let ident = &self.ident;
-        let name = self.name();
 
         let match_body = match self.fields.style {
             Style::Struct => {
-                let arms = self
-                    .fields
-                    .iter()
-                    .enumerate()
-                    .map(|(idx, field)| field.from_match_arm(&idx.into()));
-
-                let inits =
-                    iter::repeat(quote!(::std::option::Option::None)).take(self.fields.len());
-
-                let field_init = self
-                    .fields
-                    .iter()
-                    .enumerate()
-                    .map(|(idx, field)| field.from_field_init(&idx.into()));
+                let (fold, field_init) = Field::from_options(&self.fields.fields);
 
                 quote! {
-                    let acc = ::std::iter::Iterator::fold(
-                        data.options.iter(),
-                        (#(#inits,)*),
-                        |mut acc, option| {
-                            match option.name.as_str() {
-                                #(#arms,)*
-                                _ => {}
-                            }
+                    let ::serenity::all::CommandDataOption {
+                        value: ::serenity::all::CommandDataOptionValue::SubCommand(options),
+                        ..
+                    } = option else {
+                        return ::std::result::Result::Err(::serenity_commands::Error::IncorrectCommandOptionType {
+                            got: value.kind(),
+                            expected: ::serenity::all::CommandOptionType::SubCommand,
+                        });
+                    };
 
-                            acc
-                        }
-                    );
+                    #fold
 
                     ::std::result::Result::Ok(Self::#ident {
                         #(#field_init),*
@@ -272,8 +296,8 @@ impl Variant {
                 let ty = &field.ty;
 
                 quote! {
-                    <#ty as ::serenity_commands::Command>::from_command(
-                        &data.options
+                    <#ty as ::serenity_commands::SubCommand>::from_value(
+                        &option.value
                     ).map(Self::#ident)
                 }
             }
@@ -283,6 +307,8 @@ impl Variant {
                 }
             }
         };
+
+        let name = self.name();
 
         quote! {
             #name => { #match_body }
@@ -308,77 +334,73 @@ impl Field {
     }
 
     fn name(&self) -> LitStr {
-        generate_command_name(self.ident(), self.name.as_ref())
+        option_name(self.ident(), self.name.as_ref())
     }
 
-    fn to(&self, acc: &mut Accumulator) -> TokenStream {
+    fn create_option(&self, acc: &mut Accumulator) -> TokenStream {
         let ident = self.ident();
         let ty = &self.ty;
 
         let name = self.name();
         let description = documentation_string(&self.attrs, ident, acc);
 
-        let assertions = quote_spanned! {ident.span()=>
-            const _: () = {
-                if ::std::matches!(
-                    <#ty as ::serenity_commands::CommandOption>::TYPE,
-                    ::serenity::all::CommandOptionType::SubCommand
-                ) {
-                    ::std::panic!(
-                        "named field must not be of type `SubCommand`",
-                    )
-                }
-
-                if ::std::matches!(
-                    <#ty as ::serenity_commands::CommandOption>::TYPE,
-                    ::serenity::all::CommandOptionType::SubCommandGroup
-                ) {
-                    ::std::panic!(::std::concat!(
-                        "named field must not be of type `SubCommandGroup`",
-                    ))
-                }
-            };
-        };
-
         quote! {
-            {
-                #assertions
-                <#ty as ::serenity_commands::CommandOption>::to_option(
-                    #name,
-                    #description,
-                )
-            }
-        }
-    }
-
-    #[allow(clippy::wrong_self_convention)]
-    fn from_match_arm(&self, idx: &Index) -> TokenStream {
-        let name = self.name();
-
-        quote! {
-            #name => acc.#idx = ::std::option::Option::Some(
-                &option.value
+            <#ty as ::serenity_commands::BasicOption>::create_option(
+                #name,
+                #description,
             )
         }
     }
 
-    #[allow(clippy::wrong_self_convention)]
-    fn from_field_init(&self, idx: &Index) -> TokenStream {
-        let ty = &self.ty;
+    fn from_options(selfs: &[Self]) -> (TokenStream, impl Iterator<Item = TokenStream> + '_) {
+        let match_arms = selfs.iter().enumerate().map(|(idx, field)| {
+            let idx = Index::from(idx);
+            let name = field.name();
 
-        let ident = self.ident();
+            quote! {
+                #name => acc.#idx = ::std::option::Option::Some(
+                    &option.value
+                )
+            }
+        });
 
-        quote! {
-            #ident: <#ty as ::serenity_commands::CommandOption>::from_option(
-                acc.#idx
-            )?
-        }
+        let inits = iter::repeat(quote!(::std::option::Option::None)).take(selfs.len());
+
+        let field_init = selfs.iter().enumerate().map(|(idx, field)| {
+            let ident = field.ident();
+            let ty = &field.ty;
+
+            let idx = Index::from(idx);
+
+            quote! {
+                #ident: <#ty as ::serenity_commands::BasicOption>::from_value(
+                    acc.#idx
+                )?
+            }
+        });
+
+        let fold = quote! {
+            let acc = ::std::iter::Iterator::fold(
+                options.iter(),
+                (#(#inits,)*),
+                |mut acc, option| {
+                    match option.name.as_str() {
+                        #(#match_arms,)*
+                        _ => {}
+                    }
+
+                    acc
+                }
+            );
+        };
+
+        (fold, field_init)
     }
 }
 
-#[proc_macro_derive(CommandOption, attributes(command))]
-pub fn derive_command_option(tokens: proc_macro::TokenStream) -> proc_macro::TokenStream {
-    command_option::Args::from_derive_input(&parse_macro_input!(tokens))
+#[proc_macro_derive(Commands, attributes(command))]
+pub fn derive_commands(tokens: proc_macro::TokenStream) -> proc_macro::TokenStream {
+    commands::Args::from_derive_input(&parse_macro_input!(tokens))
         .map_or_else(Error::write_errors, ToTokens::into_token_stream)
         .into()
 }
@@ -390,9 +412,23 @@ pub fn derive_command(tokens: proc_macro::TokenStream) -> proc_macro::TokenStrea
         .into()
 }
 
-#[proc_macro_derive(CommandData, attributes(command))]
-pub fn derive_command_data(tokens: proc_macro::TokenStream) -> proc_macro::TokenStream {
-    command_data::Args::from_derive_input(&parse_macro_input!(tokens))
+#[proc_macro_derive(SubCommandGroup, attributes(command))]
+pub fn derive_sub_command_group(tokens: proc_macro::TokenStream) -> proc_macro::TokenStream {
+    sub_command_group::Args::from_derive_input(&parse_macro_input!(tokens))
+        .map_or_else(Error::write_errors, ToTokens::into_token_stream)
+        .into()
+}
+
+#[proc_macro_derive(SubCommand, attributes(command))]
+pub fn derive_sub_command(tokens: proc_macro::TokenStream) -> proc_macro::TokenStream {
+    sub_command::Args::from_derive_input(&parse_macro_input!(tokens))
+        .map_or_else(Error::write_errors, ToTokens::into_token_stream)
+        .into()
+}
+
+#[proc_macro_derive(BasicOption, attributes(choice))]
+pub fn derive_basic_option(tokens: proc_macro::TokenStream) -> proc_macro::TokenStream {
+    basic_option::Args::from_derive_input(&parse_macro_input!(tokens))
         .map_or_else(Error::write_errors, ToTokens::into_token_stream)
         .into()
 }
@@ -424,7 +460,7 @@ fn documentation_string(
         .unwrap_or_else(|| LitStr::new("", Span::call_site()))
 }
 
-fn generate_command_name(ident: &Ident, s: Option<&SpannedValue<String>>) -> LitStr {
+fn option_name(ident: &Ident, s: Option<&SpannedValue<String>>) -> LitStr {
     s.map_or_else(
         || {
             let ident_s = ident.to_string();
@@ -432,7 +468,7 @@ fn generate_command_name(ident: &Ident, s: Option<&SpannedValue<String>>) -> Lit
                 &ident_s
                     .strip_prefix("r#")
                     .unwrap_or(&ident_s)
-                    .to_lowercase(),
+                    .to_kebab_case(),
                 ident.span(),
             )
         },

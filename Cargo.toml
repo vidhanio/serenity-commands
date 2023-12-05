@@ -39,16 +39,16 @@ members = [".", "macros"]
 
     [workspace.package]
     authors = ["Vidhan Bhatt <me@vidhan.io>"]
-    description = "A library for intuitively creating commands for use with the Serenity Discord library."
+    description = "A library for creating/parsing Serenity slash commands."
     edition = "2021"
     homepage = "https://github.com/vidhanio/serenity-commands"
     license = "MIT"
     readme = "README.md"
     repository = "https://github.com/vidhanio/serenity-commands"
-    version = "0.2.1"
+    version = "0.3.0"
 
     [workspace.dependencies]
-    serenity-commands-macros = { version = "0.2", path = "macros" }
+    serenity-commands-macros = { version = "0.3", path = "macros" }
 
     serenity = { version = "0.12", default-features = false, features = [
         "builder",

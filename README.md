@@ -1,14 +1,19 @@
 # Serenity Commands
 
-A set of traits/derive macros for intuitively creating and parsing application commands from [Serenity](https://github/serenity-rs/serenity).
+A library for creating/parsing [Serenity](https://github.com/serenity-rs/serenity) slash commands.
 
 ## Usage
 
-```rust
-use serenity::all::{async_trait, Context, EventHandler, Interaction, Ready};
-use serenity_commands::{Command, CommandData, CommandOption};
+See the [`examples`](examples) directory for more examples.
 
-#[derive(Debug, CommandData)]
+```rust
+use serenity::all::{
+    async_trait, Client, Context, CreateInteractionResponse, CreateInteractionResponseMessage,
+    EventHandler, GatewayIntents, GuildId, Interaction,
+};
+use serenity_commands::{Command, Commands, SubCommand};
+
+#[derive(Debug, Commands)]
 enum AllCommands {
     /// Ping the bot.
     Ping,
@@ -19,8 +24,18 @@ enum AllCommands {
         message: String,
     },
 
-    /// Math operations.
-    MathCommand(MathCommand),
+    /// Perform math operations.
+    Math(MathCommand),
+}
+
+impl AllCommands {
+    fn run(self) -> String {
+        match self {
+            Self::Ping => "Pong!".to_string(),
+            Self::Echo { message } => message,
+            Self::Math(math) => math.run().to_string(),
+        }
+    }
 }
 
 #[derive(Debug, Command)]
@@ -31,43 +46,65 @@ enum MathCommand {
     /// Subtract two numbers.
     Subtract(BinaryOperation),
 
+    /// Multiply two numbers.
+    Multiply(BinaryOperation),
+
+    /// Divide two numbers.
+    Divide(BinaryOperation),
+
     /// Negate a number.
     Negate {
         /// The number to negate.
-        a: i32,
-    },
-
-    /// Raise a number to a power.
-    Power {
-        /// The number to raise.
-        a: i32,
-
-        /// The power to raise to.
-        b: i32,
+        a: f64,
     },
 }
 
-#[derive(Debug, CommandOption)]
+impl MathCommand {
+    fn run(self) -> f64 {
+        match self {
+            Self::Add(BinaryOperation { a, b }) => a + b,
+            Self::Subtract(BinaryOperation { a, b }) => a - b,
+            Self::Multiply(BinaryOperation { a, b }) => a * b,
+            Self::Divide(BinaryOperation { a, b }) => a / b,
+            Self::Negate { a } => -a,
+        }
+    }
+}
+
+#[derive(Debug, SubCommand)]
 struct BinaryOperation {
     /// The first number.
-    a: i32,
+    a: f64,
 
     /// The second number.
-    b: i32,
+    b: f64,
 }
 
-struct Handler;
+struct Handler {
+    guild_id: GuildId,
+}
 
 #[async_trait]
 impl EventHandler for Handler {
-    async fn ready(&self, ctx: Context, ready: Ready) {
-        serenity::all::Command::set_global_commands(&ctx, AllCommands::to_command_data()).await.unwrap();
+    async fn ready(&self, ctx: Context, _: serenity::model::gateway::Ready) {
+        self.guild_id
+            .set_commands(&ctx, AllCommands::create_commands())
+            .await
+            .unwrap();
     }
 
     async fn interaction_create(&self, ctx: Context, interaction: Interaction) {
         if let Interaction::Command(command) = interaction {
-            let data = AllCommands::from_command_data(&command.data).unwrap();
-            println!("{data:#?}");
+            let command_data = AllCommands::from_command_data(&command.data).unwrap();
+            command
+                .create_response(
+                    ctx,
+                    CreateInteractionResponse::Message(
+                        CreateInteractionResponseMessage::new().content(command_data.run()),
+                    ),
+                )
+                .await
+                .unwrap();
         }
     }
 }

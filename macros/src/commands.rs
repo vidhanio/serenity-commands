@@ -1,7 +1,7 @@
 use darling::{ast::Data, error::Accumulator, util::Ignored, Error, FromDeriveInput};
 use proc_macro2::TokenStream;
 use quote::{quote, ToTokens};
-use syn::Ident;
+use syn::{Generics, Ident};
 
 use crate::Variant;
 
@@ -9,42 +9,43 @@ use crate::Variant;
 #[darling(attributes(command), supports(enum_named, enum_newtype, enum_unit))]
 pub struct Args {
     ident: Ident,
+    generics: Generics,
     data: Data<Variant, Ignored>,
 }
 
 impl Args {
-    fn to(&self, acc: &mut Accumulator) -> TokenStream {
-        let variants = self
+    fn create_commands(&self, acc: &mut Accumulator) -> TokenStream {
+        let commands = self
             .data
             .as_ref()
             .take_enum()
-            .expect("`Args` should only accept `enum`s");
-
-        let variants = variants
-            .iter()
-            .map(|variant| variant.to_data(acc))
-            .collect::<Vec<_>>();
+            .expect("`Args` should only accept `enum`s")
+            .into_iter()
+            .map(|variant| variant.create_command(acc));
 
         quote! {
-            fn to_command_data() -> ::std::vec::Vec<::serenity::all::CreateCommand> {
-                ::std::vec![#(#variants),*]
+            fn create_commands() -> ::std::vec::Vec<::serenity::all::CreateCommand> {
+                ::std::vec![#(#commands),*]
             }
         }
     }
 
-    fn from(&self) -> TokenStream {
+    #[allow(clippy::wrong_self_convention)]
+    fn from_command_data(&self) -> TokenStream {
         let variants = self
             .data
             .as_ref()
             .take_enum()
             .expect("`Args` should only accept `enum`s");
 
-        let arms = variants.into_iter().map(Variant::from_data);
+        let arms = variants.into_iter().map(Variant::from_command_options);
 
         quote! {
             fn from_command_data(
                 data: &::serenity::all::CommandData
             ) -> ::serenity_commands::Result<Self> {
+                let options = &data.options;
+
                 match data.name.as_str() {
                     #(#arms,)*
                     unknown => ::std::result::Result::Err(
@@ -62,17 +63,19 @@ impl ToTokens for Args {
     fn to_tokens(&self, tokens: &mut TokenStream) {
         let mut acc = Error::accumulator();
 
-        let to = self.to(&mut acc);
-        let from = self.from();
-
         let ident = &self.ident;
+
+        let create_commands = self.create_commands(&mut acc);
+        let from_command_data = self.from_command_data();
+
+        let (impl_generics, ty_generics, where_clause) = self.generics.split_for_impl();
 
         let implementation = quote! {
             #[automatically_derived]
-            impl ::serenity_commands::CommandData for #ident {
-                #to
+            impl #impl_generics ::serenity_commands::Commands for #ident #ty_generics #where_clause {
+                #create_commands
 
-                #from
+                #from_command_data
             }
         };
 
