@@ -83,7 +83,7 @@
 //!
 //! #[async_trait]
 //! impl EventHandler for Handler {
-//!     async fn ready(&self, ctx: Context, _: serenity::model::gateway::Ready) {
+//!     async fn ready(&self, ctx: Context, _: serenity::all::Ready) {
 //!         self.guild_id
 //!             .set_commands(&ctx, AllCommands::create_commands())
 //!             .await
