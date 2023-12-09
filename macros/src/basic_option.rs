@@ -4,8 +4,6 @@ use proc_macro2::{Span, TokenStream};
 use quote::{quote, ToTokens};
 use syn::{Generics, Ident, Lit, LitStr, Type};
 
-use crate::option_name;
-
 #[derive(Debug, PartialEq, FromMeta)]
 enum OptionType {
     String,
