@@ -63,6 +63,7 @@ impl Args {
                     description,
                 )
                 #(.#method_name(#choices))*
+                .required(true)
             }
         }
     }
