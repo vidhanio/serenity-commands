@@ -1,5 +1,5 @@
 use darling::{ast::Data, util::SpannedValue, FromDeriveInput, FromMeta, FromVariant};
-use heck::ToKebabCase;
+use heck::{ToKebabCase, ToTitleCase};
 use proc_macro2::{Span, TokenStream};
 use quote::{quote, ToTokens};
 use syn::{Generics, Ident, Lit, LitStr, Type};
@@ -146,7 +146,19 @@ pub struct Variant {
 
 impl Variant {
     fn name(&self) -> LitStr {
-        option_name(&self.ident, self.name.as_ref())
+        self.name.as_ref().map_or_else(
+            || {
+                let ident_s = self.ident.to_string();
+                LitStr::new(
+                    &ident_s
+                        .strip_prefix("r#")
+                        .unwrap_or(&ident_s)
+                        .to_title_case(),
+                    self.ident.span(),
+                )
+            },
+            |name| LitStr::new(name, name.span()),
+        )
     }
 
     fn value(&self) -> Lit {
