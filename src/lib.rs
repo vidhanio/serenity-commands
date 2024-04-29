@@ -457,6 +457,7 @@ macro_rules! impl_number_command_option {
                 fn from_value(value: Option<&CommandDataOptionValue>) -> Result<Self> {
                     let value = value.ok_or(Error::MissingRequiredCommandOption)?;
 
+                    #[allow(clippy::cast_possible_truncation)]
                     match value {
                         CommandDataOptionValue::Number(v) => Ok(*v as _),
                         _ => Err(Error::IncorrectCommandOptionType {
@@ -482,9 +483,15 @@ macro_rules! impl_integer_command_option {
                         .required(true)
                 }
 
+
                 fn from_value(value: Option<&CommandDataOptionValue>) -> Result<Self> {
                     let value = value.ok_or(Error::MissingRequiredCommandOption)?;
 
+                    #[allow(
+                        clippy::cast_possible_truncation,
+                        clippy::cast_sign_loss,
+                        clippy::cast_lossless
+                    )]
                     match value {
                         CommandDataOptionValue::Integer(v) => Ok(*v as _),
                         _ => Err(Error::IncorrectCommandOptionType {
