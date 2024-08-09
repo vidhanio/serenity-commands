@@ -14,7 +14,7 @@ use std::iter;
 use darling::{
     ast::{Fields, Style},
     error::Accumulator,
-    util::SpannedValue,
+    util::{Flag, SpannedValue},
     Error, FromDeriveInput, FromField, FromVariant,
 };
 use heck::ToKebabCase;
@@ -324,6 +324,7 @@ struct Field {
     attrs: Vec<Attribute>,
 
     name: Option<SpannedValue<String>>,
+    autocomplete: Flag,
 }
 
 impl Field {
@@ -343,12 +344,14 @@ impl Field {
 
         let name = self.name();
         let description = documentation_string(&self.attrs, ident, acc);
+        let autocomplete = self.autocomplete.is_present();
 
         quote! {
             <#ty as ::serenity_commands::BasicOption>::create_option(
                 #name,
                 #description,
             )
+            .set_autocomplete(#autocomplete)
         }
     }
 
