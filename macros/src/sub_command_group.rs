@@ -3,7 +3,7 @@ use proc_macro2::TokenStream;
 use quote::{quote, ToTokens};
 use syn::{Generics, Ident};
 
-use crate::Variant;
+use crate::{BuilderMethodList, Variant};
 
 #[derive(Debug, FromDeriveInput)]
 #[darling(attributes(command), supports(enum_named, enum_newtype, enum_unit))]
@@ -11,6 +11,8 @@ pub struct Args {
     ident: Ident,
     generics: Generics,
     data: Data<Variant, Ignored>,
+
+    builder: Option<BuilderMethodList>,
 }
 
 impl Args {
@@ -20,6 +22,8 @@ impl Args {
         let body = variants
             .iter()
             .map(|variant| variant.create_sub_command(acc));
+
+        let builder_methods = &self.builder;
 
         quote! {
             fn create_option(
@@ -32,6 +36,7 @@ impl Args {
                     description,
                 )
                     #(.add_sub_option(#body))*
+                    #builder_methods
             }
         }
     }

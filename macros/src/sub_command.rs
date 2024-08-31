@@ -8,7 +8,7 @@ use proc_macro2::TokenStream;
 use quote::{quote, ToTokens};
 use syn::{Generics, Ident};
 
-use crate::Field;
+use crate::{BuilderMethodList, Field};
 
 #[derive(Debug, FromDeriveInput)]
 #[darling(
@@ -19,6 +19,8 @@ pub struct Args {
     ident: Ident,
     generics: Generics,
     data: Data<Ignored, Field>,
+
+    builder: Option<BuilderMethodList>,
 }
 
 impl Args {
@@ -57,12 +59,15 @@ impl Args {
             }
         };
 
+        let builder_methods = &self.builder;
+
         quote! {
             fn create_option(
                 name: impl ::std::convert::Into<::std::string::String>,
                 description: impl ::std::convert::Into<::std::string::String>,
             ) -> ::serenity::all::CreateCommandOption {
                 #body
+                #builder_methods
             }
         }
     }

@@ -14,7 +14,7 @@ use std::iter;
 use darling::{
     ast::{Fields, NestedMeta, Style},
     error::Accumulator,
-    util::{Flag, SpannedValue},
+    util::SpannedValue,
     Error, FromDeriveInput, FromField, FromMeta, FromVariant,
 };
 use heck::ToKebabCase;
@@ -38,6 +38,7 @@ struct Variant {
     attrs: Vec<Attribute>,
 
     name: Option<SpannedValue<String>>,
+    builder: Option<BuilderMethodList>,
 }
 
 impl Variant {
@@ -49,7 +50,7 @@ impl Variant {
         let name = self.name();
         let description = documentation_string(&self.attrs, &self.ident, acc);
 
-        match self.fields.style {
+        let body = match self.fields.style {
             Style::Struct => {
                 let fields = self.fields.iter().map(|field| field.create_option(acc));
 
@@ -77,6 +78,13 @@ impl Variant {
                         .description(#description)
                 }
             }
+        };
+
+        let builder_methods = &self.builder;
+
+        quote! {
+            #body
+            #builder_methods
         }
     }
 
@@ -84,7 +92,7 @@ impl Variant {
         let name = self.name();
         let description = documentation_string(&self.attrs, &self.ident, acc);
 
-        match self.fields.style {
+        let body = match self.fields.style {
             Style::Struct => {
                 let fields = self.fields.iter().map(|field| field.create_option(acc));
 
@@ -121,6 +129,13 @@ impl Variant {
                     )
                 }
             }
+        };
+
+        let builder_methods = &self.builder;
+
+        quote! {
+            #body
+            #builder_methods
         }
     }
 
@@ -128,7 +143,7 @@ impl Variant {
         let name = self.name();
         let description = documentation_string(&self.attrs, &self.ident, acc);
 
-        match self.fields.style {
+        let body = match self.fields.style {
             Style::Struct => {
                 let fields = self.fields.iter().map(|field| field.create_option(acc));
 
@@ -165,6 +180,13 @@ impl Variant {
                     )
                 }
             }
+        };
+
+        let builder_methods = &self.builder;
+
+        quote! {
+            #body
+            #builder_methods
         }
     }
 
@@ -383,6 +405,23 @@ impl FromMeta for BuilderMethodList {
     }
 }
 
+impl ToTokens for BuilderMethodList {
+    fn to_tokens(&self, tokens: &mut TokenStream) {
+        let methods = self.methods.iter().map(|method| {
+            let method_name = &method.method;
+            let args = &method.args;
+
+            quote_spanned! {method_name.span()=>
+                .#method_name(#args)
+            }
+        });
+
+        tokens.extend(quote! {
+            #(#methods)*
+        });
+    }
+}
+
 #[derive(Debug, FromField)]
 #[darling(attributes(command), forward_attrs(doc))]
 struct Field {
@@ -391,7 +430,6 @@ struct Field {
     attrs: Vec<Attribute>,
 
     name: Option<SpannedValue<String>>,
-    autocomplete: Flag,
 
     builder: Option<BuilderMethodList>,
 }
@@ -413,25 +451,14 @@ impl Field {
 
         let name = self.name();
         let description = documentation_string(&self.attrs, ident, acc);
-        let autocomplete = self.autocomplete.is_present();
-        let builder = self.builder.as_ref().into_iter().flat_map(|list| {
-            list.methods.iter().map(|method| {
-                let method_name = &method.method;
-                let args = &method.args;
-
-                quote_spanned! {method_name.span()=>
-                    .#method_name(#args)
-                }
-            })
-        });
+        let builder_methods = &self.builder;
 
         quote! {
             <#ty as ::serenity_commands::BasicOption>::create_option(
                 #name,
                 #description,
             )
-            .set_autocomplete(#autocomplete)
-            #(#builder)*
+            #builder_methods
         }
     }
 

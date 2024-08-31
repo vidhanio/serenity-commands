@@ -4,6 +4,8 @@ use proc_macro2::{Span, TokenStream};
 use quote::{quote, ToTokens};
 use syn::{Generics, Ident, Lit, LitStr, Type};
 
+use crate::BuilderMethodList;
+
 #[derive(Debug, PartialEq, FromMeta)]
 enum OptionType {
     String,
@@ -37,6 +39,8 @@ pub struct Args {
     data: Data<Variant, Type>,
 
     option_type: SpannedValue<OptionType>,
+
+    builder: Option<BuilderMethodList>,
 }
 
 impl Args {
@@ -51,6 +55,7 @@ impl Args {
 
         let command_option_type = self.option_type.command_option_type();
         let method_name = self.option_type.method_name(self.option_type.span());
+        let builder_methods = &self.builder;
 
         quote! {
             fn create_option(
@@ -64,6 +69,7 @@ impl Args {
                 )
                 #(.#method_name(#choices))*
                 .required(true)
+                #builder_methods
             }
         }
     }
