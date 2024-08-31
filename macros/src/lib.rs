@@ -548,9 +548,9 @@ fn documentation_string(
     spanned: &impl Spanned,
     acc: &mut Accumulator,
 ) -> LitStr {
-    let res = attrs
+    let mut doc_comments = attrs
         .iter()
-        .find_map(|attr| match &attr.meta {
+        .filter_map(|attr| match &attr.meta {
             Meta::NameValue(MetaNameValue {
                 path,
                 value:
@@ -558,13 +558,32 @@ fn documentation_string(
                         lit: Lit::Str(s), ..
                     }),
                 ..
-            }) if path.is_ident("doc") => Some(LitStr::new(s.value().trim(), s.span())),
+            }) if path.is_ident("doc") => Some((s.span(), s.value())),
             _ => None,
         })
-        .ok_or_else(|| {
+        .peekable();
+
+    let res = if doc_comments.peek().is_none() {
+        Err(
             Error::custom("missing documentation comment (`///`) to use as description")
-                .with_span(spanned)
-        });
+                .with_span(spanned),
+        )
+    } else {
+        let (span, s) = doc_comments.fold(
+            (Span::call_site(), String::new()),
+            |(span, mut acc), (_, s)| {
+                if !acc.is_empty() {
+                    acc.push(' ');
+                }
+
+                acc.push_str(s.trim());
+
+                (span, acc)
+            },
+        );
+
+        Ok(LitStr::new(&s, span))
+    };
 
     acc.handle(res)
         .unwrap_or_else(|| LitStr::new("", Span::call_site()))
