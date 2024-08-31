@@ -1233,7 +1233,7 @@ dependencies = [
 
 [[package]]
 name = "serenity-commands"
-version = "0.4.3"
+version = "0.4.5"
 dependencies = [
  "serenity",
  "serenity-commands-macros",
@@ -1243,7 +1243,7 @@ dependencies = [
 
 [[package]]
 name = "serenity-commands-macros"
-version = "0.4.3"
+version = "0.4.5"
 dependencies = [
  "darling",
  "heck",

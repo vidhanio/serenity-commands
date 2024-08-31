@@ -12,17 +12,22 @@ mod sub_command_group;
 use std::iter;
 
 use darling::{
-    ast::{Fields, Style},
+    ast::{Fields, NestedMeta, Style},
     error::Accumulator,
     util::{Flag, SpannedValue},
-    Error, FromDeriveInput, FromField, FromVariant,
+    Error, FromDeriveInput, FromField, FromMeta, FromVariant,
 };
 use heck::ToKebabCase;
 use proc_macro2::{Span, TokenStream};
-use quote::{quote, ToTokens};
+use quote::{quote, quote_spanned, ToTokens};
 use syn::{
-    parse_macro_input, spanned::Spanned, Attribute, Expr, ExprLit, Ident, Index, Lit, LitStr, Meta,
-    MetaNameValue, Type,
+    parse::{Parse, Parser},
+    parse_macro_input,
+    punctuated::Punctuated,
+    spanned::Spanned,
+    token::Paren,
+    Attribute, Expr, ExprLit, Ident, Index, Lit, LitStr, MacroDelimiter, Meta, MetaNameValue,
+    Token, Type,
 };
 
 #[derive(Debug, FromVariant)]
@@ -316,6 +321,68 @@ impl Variant {
     }
 }
 
+#[derive(Debug)]
+struct DetachedMethodCall {
+    method: Ident,
+    #[allow(dead_code)]
+    paren_token: Paren,
+    args: Punctuated<Expr, Token![,]>,
+}
+
+impl Parse for DetachedMethodCall {
+    fn parse(input: syn::parse::ParseStream) -> syn::Result<Self> {
+        let content;
+
+        Ok(Self {
+            method: input.parse()?,
+            paren_token: syn::parenthesized!(content in input),
+            args: content.parse_terminated(Expr::parse, Token![,])?,
+        })
+    }
+}
+
+impl FromMeta for DetachedMethodCall {
+    fn from_meta(item: &Meta) -> darling::Result<Self> {
+        let Meta::List(list) = item else {
+            return Err(Error::unsupported_format("non-meta list"));
+        };
+
+        let method = list
+            .path
+            .get_ident()
+            .cloned()
+            .ok_or_else(|| Error::unsupported_format("non-ident path"))?;
+
+        let MacroDelimiter::Paren(paren_token) = list.delimiter else {
+            return Err(Error::unsupported_format("non-parenthesized arguments"));
+        };
+
+        let args = Punctuated::<Expr, Token![,]>::parse_terminated.parse2(list.tokens.clone())?;
+
+        Ok(Self {
+            method,
+            paren_token,
+            args,
+        })
+    }
+}
+
+#[derive(Debug)]
+struct BuilderMethodList {
+    methods: Vec<DetachedMethodCall>,
+}
+
+impl FromMeta for BuilderMethodList {
+    fn from_list(items: &[NestedMeta]) -> darling::Result<Self> {
+        let methods = items
+            .iter()
+            .map(DetachedMethodCall::from_nested_meta)
+            .collect::<darling::Result<_>>()?;
+
+        Ok(Self { methods })
+    }
+}
+
 #[derive(Debug, FromField)]
 #[darling(attributes(command), forward_attrs(doc))]
 struct Field {
@@ -325,6 +392,8 @@ struct Field {
 
     name: Option<SpannedValue<String>>,
     autocomplete: Flag,
+
+    builder: Option<BuilderMethodList>,
 }
 
 impl Field {
@@ -345,6 +414,16 @@ impl Field {
         let name = self.name();
         let description = documentation_string(&self.attrs, ident, acc);
         let autocomplete = self.autocomplete.is_present();
+        let builder = self.builder.as_ref().into_iter().flat_map(|list| {
+            list.methods.iter().map(|method| {
+                let method_name = &method.method;
+                let args = &method.args;
+
+                quote_spanned! {method_name.span()=>
+                    .#method_name(#args)
+                }
+            })
+        });
 
         quote! {
             <#ty as ::serenity_commands::BasicOption>::create_option(
@@ -352,6 +431,7 @@ impl Field {
                 #description,
             )
             .set_autocomplete(#autocomplete)
+            #(#builder)*
         }
     }
 

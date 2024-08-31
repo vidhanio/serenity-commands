@@ -45,7 +45,7 @@ members = [".", "macros"]
     license = "MIT"
     readme = "README.md"
     repository = "https://github.com/vidhanio/serenity-commands"
-    version = "0.4.3"
+    version = "0.4.5"
 
     [workspace.dependencies]
     serenity-commands-macros = { version = "0.4", path = "macros" }
