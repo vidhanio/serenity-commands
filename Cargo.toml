@@ -18,7 +18,7 @@ version.workspace = true
 serenity-commands-macros.workspace = true
 
 serenity.workspace = true
-thiserror = "1"
+thiserror = "2"
 
 [dev-dependencies]
 serenity = { workspace = true, default-features = true }
