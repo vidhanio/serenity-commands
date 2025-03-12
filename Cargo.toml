@@ -18,7 +18,7 @@ version.workspace = true
 serenity-commands-macros.workspace = true
 
 serenity.workspace = true
-thiserror = "1"
+thiserror = "2"
 
 [dev-dependencies]
 serenity = { workspace = true, default-features = true }
@@ -45,10 +45,10 @@ members = [".", "macros"]
     license = "MIT"
     readme = "README.md"
     repository = "https://github.com/vidhanio/serenity-commands"
-    version = "0.5.1"
+    version = "0.6.0"
 
     [workspace.dependencies]
-    serenity-commands-macros = { version = "0.5", path = "macros" }
+    serenity-commands-macros = { version = "0.6", path = "macros" }
 
     serenity = { version = "0.12", default-features = false, features = [
         "builder",
