@@ -24,6 +24,12 @@ enum AllCommands {
     AddVec2s(AddCommand<Vec2>),
 }
 
+enum AllCommandsAutocomplete {
+    AddInts(AddCommand<u64>),
+    AddFloats(AddCommand<f64>),
+    AddVec2s(AddCommand<Vec2>),
+}
+
 impl AllCommands {
     fn run(self) -> String {
         match self {
@@ -56,31 +62,21 @@ struct Vec2 {
 }
 
 impl BasicOption for Vec2 {
+    type Partial = String;
+
     fn create_option(
         name: impl Into<String>,
         description: impl Into<String>,
     ) -> serenity::all::CreateCommandOption {
-        serenity::all::CreateCommandOption::new(
-            serenity::all::CommandOptionType::String,
-            name,
-            description,
-        )
-        .required(true)
+        String::create_option(name, description)
     }
 
     fn from_value(
         value: Option<&serenity::all::CommandDataOptionValue>,
     ) -> serenity_commands::Result<Self> {
-        let value = value.ok_or(serenity_commands::Error::MissingRequiredCommandOption)?;
+        let value = String::from_value(value)?;
 
-        let serenity::all::CommandDataOptionValue::String(choice) = value else {
-            return Err(serenity_commands::Error::IncorrectCommandOptionType {
-                got: value.kind(),
-                expected: serenity::all::CommandOptionType::String,
-            });
-        };
-
-        let (x, y) = choice
+        let (x, y) = value
             .split_once(',')
             .ok_or_else(|| serenity_commands::Error::Custom("expected comma".into()))?;
 

@@ -107,6 +107,8 @@
 //! }
 //! ```
 
+use std::{fmt::Debug, ops::Deref};
+
 use serenity::all::{
     AttachmentId, ChannelId, CommandData, CommandDataOption, CommandDataOptionValue,
     CommandOptionType, CreateCommand, CreateCommandOption, GenericId, RoleId, UserId,
@@ -310,9 +312,21 @@ pub enum Error {
     #[error("unknown command option: {0}")]
     UnknownCommandOption(String),
 
+    /// An unknown autocomplete option was provided.
+    #[error("unknown autocomplete option: {0}")]
+    UnknownAutocompleteOption(String),
+
     /// A required command option was not provided.
     #[error("required command option not provided")]
     MissingRequiredCommandOption,
+
+    /// An unexpected autocomplete option was provided.
+    #[error("unexpected autocomplete option")]
+    UnexpectedAutocompleteOption,
+
+    /// An autocomplete option was not provided.
+    #[error("autocomplete option not provided")]
+    MissingAutocompleteOption,
 
     /// An unknown choice was provided.
     #[error("unknown choice: {0}")]
@@ -352,6 +366,9 @@ pub trait Command: Sized {
 
 /// A sub-command group which can be nested inside of a [`Command`] and contains
 /// [`SubCommand`]s.
+///
+/// This is a super-trait of [`SubCommand`], as a [`SubCommand`] can be used
+/// anywhere a [`SubCommandGroup`] can.
 pub trait SubCommandGroup: Sized {
     /// Create the command option.
     fn create_option(
@@ -372,30 +389,25 @@ pub trait SubCommandGroup: Sized {
 ///
 /// This is a sub-trait of [`SubCommandGroup`], as a [`SubCommand`] can be used
 /// anywhere a [`SubCommandGroup`] can.
-pub trait SubCommand: SubCommandGroup {
-    /// Create the command option.
-    fn create_option(
-        name: impl Into<String>,
-        description: impl Into<String>,
-    ) -> CreateCommandOption {
-        <Self as SubCommandGroup>::create_option(name, description)
-    }
-
-    /// Extract data from a [`CommandDataOption`].
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the implementation fails.
-    fn from_value(value: &CommandDataOptionValue) -> Result<Self> {
-        <Self as SubCommandGroup>::from_value(value)
-    }
-}
+pub trait SubCommand: SubCommandGroup {}
 
 /// A basic option which can be nested inside of [`Command`]s or
 /// [`SubCommand`]s.
 ///
 /// This trait is implemented already for most primitive types.
 pub trait BasicOption: Sized {
+    /// The type of this option when it may not be fully parseable.
+    ///
+    /// This will usually occur when this field is part of an autocomplete
+    /// interaction. This will usually be [`String`] or an integer type, and is
+    /// present so an autocomplete interaction can still be handled if a field
+    /// is not yet parseable to the type of the option.
+    ///
+    /// As this should be a type that can reliably be parsed from a
+    /// [`CommandDataOptionValue`], it's [`BasicOption::from_value`]
+    /// implementation should ideally be infallible.
+    type Partial: BasicOption;
+
     /// Create the command option.
     fn create_option(
         name: impl Into<String>,
@@ -410,10 +422,32 @@ pub trait BasicOption: Sized {
     fn from_value(value: Option<&CommandDataOptionValue>) -> Result<Self>;
 }
 
+impl<T: BasicOption> BasicOption for Option<T> {
+    /// Delegates to `T`'s [`BasicOption::Partial`] type.
+    type Partial = T::Partial;
+
+    /// Delegates to `T`'s [`BasicOption::create_option`] implementation, but
+    /// sets [`CreateCommandOption::required`] to `false` afterwards.
+    fn create_option(
+        name: impl Into<String>,
+        description: impl Into<String>,
+    ) -> CreateCommandOption {
+        T::create_option(name, description).required(false)
+    }
+
+    /// Only delegates to `T`'s [`BasicOption::from_value`] implementation if
+    /// `value` is [`Some`].
+    fn from_value(value: Option<&CommandDataOptionValue>) -> Result<Self> {
+        value.map(|option| T::from_value(Some(option))).transpose()
+    }
+}
+
 macro_rules! impl_command_option {
     ($($Variant:ident($($Ty:ty),* $(,)?)),* $(,)?) => {
         $($(
             impl BasicOption for $Ty {
+                type Partial = Self;
+
                 fn create_option(name: impl Into<String>, description: impl Into<String>) -> CreateCommandOption {
                     CreateCommandOption::new(CommandOptionType::$Variant, name, description)
                         .required(true)
@@ -436,19 +470,21 @@ macro_rules! impl_command_option {
 }
 
 impl_command_option! {
-    Boolean(bool),
     String(String),
-    Attachment(AttachmentId),
-    Channel(ChannelId),
-    Mentionable(GenericId),
-    Role(RoleId),
+    Boolean(bool),
     User(UserId),
+    Channel(ChannelId),
+    Role(RoleId),
+    Mentionable(GenericId),
+    Attachment(AttachmentId),
 }
 
 macro_rules! impl_number_command_option {
     ($($Ty:ty),* $(,)?) => {
         $(
             impl BasicOption for $Ty {
+                type Partial = Self;
+
                 fn create_option(name: impl Into<String>, description: impl Into<String>) -> CreateCommandOption {
                     CreateCommandOption::new(CommandOptionType::Number, name, description)
                         .required(true)
@@ -478,11 +514,12 @@ macro_rules! impl_integer_command_option {
     ($($Ty:ty),* $(,)?) => {
         $(
             impl BasicOption for $Ty {
+                type Partial = i64;
+
                 fn create_option(name: impl Into<String>, description: impl Into<String>) -> CreateCommandOption {
                     CreateCommandOption::new(CommandOptionType::Integer, name, description)
                         .required(true)
                 }
-
 
                 fn from_value(value: Option<&CommandDataOptionValue>) -> Result<Self> {
                     let value = value.ok_or(Error::MissingRequiredCommandOption)?;
@@ -507,19 +544,197 @@ macro_rules! impl_integer_command_option {
 
 impl_integer_command_option!(u8, u16, u32, u64, u128, usize, i8, i16, i32, i64, i128, isize);
 
-impl<T: BasicOption> BasicOption for Option<T> {
-    /// Delegates to `T`'s [`BasicOption::create_option`] implementation, but
-    /// sets [`CreateCommandOption::required`] to `false` afterwards.
+impl BasicOption for char {
+    type Partial = String;
+
     fn create_option(
         name: impl Into<String>,
         description: impl Into<String>,
     ) -> CreateCommandOption {
-        T::create_option(name, description).required(false)
+        CreateCommandOption::new(CommandOptionType::String, name, description)
+            .min_length(1)
+            .max_length(1)
+            .required(true)
     }
 
-    /// Only delegates to `T`'s [`BasicOption::from_value`] implementation if
-    /// `value` is [`Some`].
     fn from_value(value: Option<&CommandDataOptionValue>) -> Result<Self> {
-        value.map(|option| T::from_value(Some(option))).transpose()
+        let s = String::from_value(value)?;
+
+        let mut chars = s.chars();
+
+        match (chars.next(), chars.next()) {
+            (Some(c), None) => Ok(c),
+            _ => Err(Error::Custom("expected single character".into())),
+        }
     }
+}
+
+/// A field which may be partially parsed.
+///
+/// This is used for fields which may not be fully parseable, such as when
+/// handling autocomplete interactions.
+pub enum PartialOption<T: BasicOption> {
+    /// A successfully parsed value.
+    Value(T),
+
+    /// A partially parsed value, along with the error that occurred while
+    /// attempting to parse it.
+    Partial(T::Partial, Error),
+}
+
+impl<T: BasicOption> PartialOption<T> {
+    /// Extract the parsed value from this field.
+    pub fn into_value(self) -> Option<T> {
+        match self {
+            Self::Value(value) => Some(value),
+            Self::Partial(_, _) => None,
+        }
+    }
+
+    /// Extract the partially parsed value and the error that occurred while
+    /// attempting to parse it from this field.
+    pub fn into_partial(self) -> Option<(T::Partial, Error)> {
+        match self {
+            Self::Value(_) => None,
+            Self::Partial(value, error) => Some((value, error)),
+        }
+    }
+
+    /// Get a reference to the parsed value from this field.
+    pub const fn as_value(&self) -> Option<&T> {
+        match self {
+            Self::Value(value) => Some(value),
+            Self::Partial(_, _) => None,
+        }
+    }
+
+    /// Get a reference to the partially parsed value and the error that
+    /// occurred while attempting to parse it from this field.
+    pub const fn as_partial(&self) -> Option<(&T::Partial, &Error)> {
+        match self {
+            Self::Value(_) => None,
+            Self::Partial(value, error) => Some((value, error)),
+        }
+    }
+
+    /// Check if this field is a parsed value.
+    pub const fn is_value(&self) -> bool {
+        matches!(self, Self::Value(_))
+    }
+
+    /// Check if this field is a partially parsed value.
+    pub const fn is_partial(&self) -> bool {
+        matches!(self, Self::Partial(_, _))
+    }
+}
+
+impl<T: BasicOption<Partial = T>> PartialOption<T> {
+    /// Convert this field into the parsed value.
+    pub fn into_inner(self) -> T {
+        match self {
+            Self::Value(value) | Self::Partial(value, _) => value,
+        }
+    }
+
+    /// Get a reference to the parsed value.
+    pub const fn as_inner(&self) -> &T {
+        match self {
+            Self::Value(value) | Self::Partial(value, _) => value,
+        }
+    }
+}
+
+impl<T: BasicOption> BasicOption for PartialOption<T> {
+    type Partial = <T::Partial as BasicOption>::Partial;
+
+    fn create_option(
+        name: impl Into<String>,
+        description: impl Into<String>,
+    ) -> CreateCommandOption {
+        T::create_option(name, description)
+    }
+
+    fn from_value(value: Option<&CommandDataOptionValue>) -> Result<Self> {
+        match T::from_value(value) {
+            Ok(value) => Ok(Self::Value(value)),
+            Err(error) => Ok(Self::Partial(T::Partial::from_value(value)?, error)),
+        }
+    }
+}
+
+impl<T, U> AsRef<U> for PartialOption<T>
+where
+    T: BasicOption<Partial = T>,
+    U: ?Sized,
+    <Self as Deref>::Target: AsRef<U>,
+{
+    fn as_ref(&self) -> &U {
+        self.deref().as_ref()
+    }
+}
+
+impl<T> Deref for PartialOption<T>
+where
+    T: BasicOption<Partial = T>,
+{
+    type Target = T;
+
+    fn deref(&self) -> &Self::Target {
+        self.as_inner()
+    }
+}
+
+impl<T: BasicOption + Debug> Debug for PartialOption<T>
+where
+    T::Partial: Debug,
+{
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Value(value) => f.debug_tuple("Value").field(value).finish(),
+            Self::Partial(value, error) => {
+                f.debug_tuple("Partial").field(value).field(error).finish()
+            }
+        }
+    }
+}
+
+/// A trait for identifying types that support autocomplete interactions.
+pub trait SupportsAutocomplete {
+    /// The type of the autocomplete interaction.
+    type Autocomplete;
+}
+
+/// A helper type alias for extracting the autocomplete type from a type that
+/// supports autocomplete.
+pub type Autocomplete<T> = <T as SupportsAutocomplete>::Autocomplete;
+
+/// A utility for extracting data from an autocomplete interaction.
+pub trait AutocompleteCommands: Sized {
+    /// Extract data from [`CommandData`].
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the implementation fails.
+    fn from_command_data(data: &CommandData) -> Result<Self>;
+}
+
+/// A top-level command for use with [`AutocompleteCommands`].
+pub trait AutocompleteCommand: Sized {
+    /// Extract data from a list of [`CommandDataOption`]s.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the implementation fails.
+    fn from_options(options: &[CommandDataOption]) -> Result<Self>;
+}
+
+/// A sub-command group which can be nested inside of an [`AutocompleteCommand`]
+/// and contains [`AutocompleteSubCommandOrGroup`]s.
+pub trait AutocompleteSubCommandOrGroup: Sized {
+    /// Extract data from a [`CommandDataOptionValue`].
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the implementation fails.
+    fn from_value(value: &CommandDataOptionValue) -> Result<Self>;
 }

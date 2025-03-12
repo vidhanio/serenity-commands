@@ -3,7 +3,7 @@ use proc_macro2::TokenStream;
 use quote::{quote, ToTokens};
 use syn::{Generics, Ident};
 
-use crate::Variant;
+use crate::{utils::IdentExt, variant::Variant};
 
 #[derive(Debug, FromDeriveInput)]
 #[darling(attributes(command), supports(enum_named, enum_newtype, enum_unit))]
@@ -44,18 +44,81 @@ impl Args {
             fn from_command_data(
                 data: &::serenity::all::CommandData
             ) -> ::serenity_commands::Result<Self> {
+                if data.autocomplete().is_some() {
+                    return ::std::result::Result::Err(
+                        ::serenity_commands::Error::UnexpectedAutocompleteOption
+                    );
+                }
                 let options = &data.options;
 
                 match data.name.as_str() {
                     #(#arms,)*
-                    unknown => ::std::result::Result::Err(
+                    _ => ::std::result::Result::Err(
                         ::serenity_commands::Error::UnknownCommand(
-                            ::std::borrow::ToOwned::to_owned(unknown)
+                            ::std::clone::Clone::clone(&data.name)
                         )
                     ),
                 }
             }
         }
+    }
+
+    fn autocomplete(&self, acc: &mut Accumulator) -> Option<TokenStream> {
+        let variants = self
+            .data
+            .as_ref()
+            .take_enum()
+            .expect("`Args` should only accept `enum`s");
+
+        let (variants, arms) = variants
+            .into_iter()
+            .filter_map(|variant| variant.from_autocomplete_command_options(acc))
+            .unzip::<_, _, Vec<_>, Vec<_>>();
+
+        if variants.is_empty() {
+            return None;
+        }
+
+        let ident = &self.ident;
+        let autocomplete_ident = self.ident.autocomplete();
+
+        let generics = &self.generics;
+        let (impl_generics, ty_generics, where_clause) = self.generics.split_for_impl();
+
+        Some(quote! {
+            pub enum #autocomplete_ident #generics {
+                #(#variants,)*
+            }
+
+            #[automatically_derived]
+            impl #impl_generics ::serenity_commands::SupportsAutocomplete for #ident #ty_generics #where_clause {
+                type Autocomplete = #autocomplete_ident;
+            }
+
+            #[automatically_derived]
+            impl #impl_generics ::serenity_commands::AutocompleteCommands for #autocomplete_ident #ty_generics #where_clause {
+                fn from_command_data(
+                    data: &::serenity::all::CommandData
+                ) -> ::serenity_commands::Result<Self> {
+                    if data.autocomplete().is_none() {
+                        return ::std::result::Result::Err(
+                            ::serenity_commands::Error::MissingAutocompleteOption
+                        );
+                    }
+
+                    let options = &data.options;
+
+                    match data.name.as_str() {
+                        #(#arms,)*
+                        _ => ::std::result::Result::Err(
+                            ::serenity_commands::Error::UnknownCommand(
+                                ::std::clone::Clone::clone(&data.name)
+                            )
+                        ),
+                    }
+                }
+            }
+        })
     }
 }
 
@@ -67,6 +130,7 @@ impl ToTokens for Args {
 
         let create_commands = self.create_commands(&mut acc);
         let from_command_data = self.from_command_data();
+        let autocomplete = self.autocomplete(&mut acc);
 
         let (impl_generics, ty_generics, where_clause) = self.generics.split_for_impl();
 
@@ -77,6 +141,8 @@ impl ToTokens for Args {
 
                 #from_command_data
             }
+
+            #autocomplete
         };
 
         acc.finish_with(implementation)

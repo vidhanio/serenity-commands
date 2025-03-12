@@ -8,7 +8,7 @@ use proc_macro2::TokenStream;
 use quote::{quote, ToTokens};
 use syn::{Generics, Ident};
 
-use crate::{BuilderMethodList, Field};
+use crate::{field::Field, utils::IdentExt, BuilderMethodList};
 
 #[derive(Debug, FromDeriveInput)]
 #[darling(
@@ -80,7 +80,7 @@ impl Args {
 
         let body = match fields.style {
             Style::Struct => {
-                let (fold, inits) = Field::from_options(&fields.fields);
+                let (fold, field_inits) = Field::from_options(&fields.fields);
 
                 quote! {
                     let ::serenity::all::CommandDataOptionValue::SubCommand(options) = value else {
@@ -95,7 +95,7 @@ impl Args {
                     #fold
 
                     ::std::result::Result::Ok(Self {
-                        #(#inits),*
+                        #field_inits
                     })
                 }
             }
@@ -123,6 +123,94 @@ impl Args {
             }
         }
     }
+
+    fn autocomplete(&self) -> Option<TokenStream> {
+        let Data::Struct(fields) = &self.data else {
+            unreachable!()
+        };
+
+        let autocomplete_ident = self.ident.autocomplete();
+        let generics = &self.generics;
+        let (impl_generics, ty_generics, where_clause) = self.generics.split_for_impl();
+
+        let (ty, body) = match fields.style {
+            Style::Struct => {
+                let variants = Field::autocomplete_variants(&fields.fields);
+
+                if variants.is_empty() {
+                    return None;
+                }
+
+                let body = Field::from_autocomplete_options(&fields.fields);
+
+                (
+                    quote! {
+                        pub enum #autocomplete_ident #generics {
+                            #variants
+                        }
+                    },
+                    quote! {
+                        let ::serenity::all::CommandDataOptionValue::SubCommand(options) = value else {
+                            return ::std::result::Result::Err(
+                                ::serenity_commands::Error::IncorrectCommandOptionType {
+                                    got: value.kind(),
+                                    expected: ::serenity::all::CommandOptionType::SubCommand,
+                                },
+                            );
+                        };
+
+                        #body
+                    },
+                )
+            }
+            Style::Tuple => {
+                let field = fields
+                    .fields
+                    .first()
+                    .expect("`Args` should only accept tuple `struct`s with one field");
+
+                if !field.autocomplete.is_present() {
+                    return None;
+                }
+
+                let ty = &field.ty;
+
+                (
+                    quote! {
+                        pub struct #autocomplete_ident #generics(
+                            ::serenity_commands::Autocomplete<#ty>
+                        );
+                    },
+                    quote! {
+                        <
+                            ::serenity_commands::Autocomplete<#ty> as ::serenity_commands::AutocompleteCommand
+                        >::from_command(options).map(Self)
+                    },
+                )
+            }
+            Style::Unit => return None,
+        };
+
+        let ident = &self.ident;
+
+        Some(quote! {
+            #ty
+
+            #[automatically_derived]
+            impl #impl_generics ::serenity_commands::SupportsAutocomplete for #ident #ty_generics #where_clause {
+                type Autocomplete = #autocomplete_ident #ty_generics;
+            }
+
+            #[automatically_derived]
+            impl #impl_generics ::serenity_commands::AutocompleteSubCommandOrGroup for #autocomplete_ident #ty_generics #where_clause {
+                fn from_value(
+                    value: &::serenity::all::CommandDataOptionValue
+                ) -> ::serenity_commands::Result<Self> {
+                    #body
+                }
+            }
+        })
+    }
 }
 
 impl ToTokens for Args {
@@ -133,6 +221,7 @@ impl ToTokens for Args {
 
         let create_option = self.create_option(&mut acc);
         let from_value = self.from_value();
+        let autocomplete = self.autocomplete();
 
         let (impl_generics, ty_generics, where_clause) = self.generics.split_for_impl();
 
@@ -145,20 +234,9 @@ impl ToTokens for Args {
             }
 
             #[automatically_derived]
-            impl #impl_generics ::serenity_commands::SubCommand for #ident #ty_generics #where_clause {
-                fn create_option(
-                    name: impl ::std::convert::Into<::std::string::String>,
-                    description: impl ::std::convert::Into<::std::string::String>,
-                ) -> ::serenity::all::CreateCommandOption {
-                    <Self as ::serenity_commands::SubCommandGroup>::create_option(name, description)
-                }
+            impl #impl_generics ::serenity_commands::SubCommand for #ident #ty_generics #where_clause {}
 
-                fn from_value(
-                    value: &::serenity::all::CommandDataOptionValue,
-                ) -> ::serenity_commands::Result<Self> {
-                    <Self as ::serenity_commands::SubCommandGroup>::from_value(value)
-                }
-            }
+            #autocomplete
         };
 
         acc.finish_with(implementation)

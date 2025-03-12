@@ -1,10 +1,12 @@
 use darling::{ast::Data, util::SpannedValue, FromDeriveInput, FromMeta, FromVariant};
-use heck::{ToKebabCase, ToTitleCase};
 use proc_macro2::{Span, TokenStream};
 use quote::{quote, ToTokens};
 use syn::{Generics, Ident, Lit, LitStr, Type};
 
-use crate::BuilderMethodList;
+use crate::{
+    utils::{title_name, IdentExt},
+    BuilderMethodList,
+};
 
 #[derive(Debug, PartialEq, FromMeta)]
 enum OptionType {
@@ -32,11 +34,11 @@ impl OptionType {
 }
 
 #[derive(Debug, FromDeriveInput)]
-#[darling(attributes(choice), supports(enum_unit))]
+#[darling(attributes(option), supports(enum_unit))]
 pub struct Args {
     ident: Ident,
     generics: Generics,
-    data: Data<Variant, Type>,
+    data: Data<ChoiceVariant, Type>,
 
     option_type: SpannedValue<OptionType>,
 
@@ -51,7 +53,7 @@ impl Args {
             .take_enum()
             .unwrap()
             .into_iter()
-            .map(Variant::create_option_choice);
+            .map(ChoiceVariant::create_option_choice);
 
         let command_option_type = self.option_type.command_option_type();
         let method_name = self.option_type.method_name(self.option_type.span());
@@ -82,7 +84,7 @@ impl Args {
             .take_enum()
             .unwrap()
             .into_iter()
-            .map(Variant::from_value);
+            .map(ChoiceVariant::from_value);
 
         let option_type = self.option_type.command_option_type();
 
@@ -142,41 +144,22 @@ impl ToTokens for Args {
 
 #[derive(Debug, FromVariant)]
 #[darling(attributes(choice))]
-pub struct Variant {
+struct ChoiceVariant {
     ident: Ident,
-    name: Option<SpannedValue<String>>,
 
+    name: Option<SpannedValue<String>>,
     value: Option<Lit>,
 }
 
-impl Variant {
+impl ChoiceVariant {
     fn name(&self) -> LitStr {
-        self.name.as_ref().map_or_else(
-            || {
-                let ident_s = self.ident.to_string();
-                LitStr::new(
-                    &ident_s
-                        .strip_prefix("r#")
-                        .unwrap_or(&ident_s)
-                        .to_title_case(),
-                    self.ident.span(),
-                )
-            },
-            |name| LitStr::new(name, name.span()),
-        )
+        title_name(&self.ident, self.name.as_ref())
     }
 
     fn value(&self) -> Lit {
-        self.value.clone().unwrap_or_else(|| {
-            let ident_s = self.ident.to_string();
-            Lit::Str(LitStr::new(
-                &ident_s
-                    .strip_prefix("r#")
-                    .unwrap_or(&ident_s)
-                    .to_kebab_case(),
-                self.ident.span(),
-            ))
-        })
+        self.value
+            .clone()
+            .unwrap_or_else(|| self.ident.to_kebab_case().into())
     }
 
     fn create_option_choice(&self) -> TokenStream {
