@@ -31,6 +31,14 @@ impl OptionType {
             Self::Number => Ident::new("add_number_choice", span),
         }
     }
+
+    fn partial_type(&self, span: Span) -> TokenStream {
+        match self {
+            Self::String => quote!(::std::string::String),
+            Self::Integer => quote!(::std::primitive::i64),
+            Self::Number => quote!(::std::primitive::f64),
+        }
+    }
 }
 
 #[derive(Debug, FromDeriveInput)]
@@ -125,6 +133,7 @@ impl ToTokens for Args {
     fn to_tokens(&self, tokens: &mut TokenStream) {
         let ident = &self.ident;
 
+        let partial_type = self.option_type.partial_type(self.option_type.span());
         let create_option = self.create_option();
         let from_value = self.from_value();
 
@@ -133,6 +142,8 @@ impl ToTokens for Args {
         quote! {
             #[automatically_derived]
             impl #impl_generics ::serenity_commands::BasicOption for #ident #ty_generics #where_clause {
+                type Partial = #partial_type;
+
                 #create_option
 
                 #from_value
