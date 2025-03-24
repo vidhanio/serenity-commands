@@ -8,7 +8,7 @@ use darling::{
 use heck::ToPascalCase;
 use proc_macro2::TokenStream;
 use quote::quote;
-use syn::{Attribute, Ident, Index, LitStr, Type};
+use syn::{Attribute, Ident, Index, LitStr, Path, Type};
 
 use crate::{
     utils::{documentation_string, kebab_name},
@@ -25,6 +25,7 @@ pub struct Field {
     name: Option<SpannedValue<String>>,
     builder: Option<BuilderMethodList>,
     pub autocomplete: Flag,
+    with: Option<Path>,
 }
 
 impl Field {
@@ -39,8 +40,16 @@ impl Field {
     }
 
     pub fn create_option(&self, acc: &mut Accumulator) -> TokenStream {
+        let path_base = self.with.as_ref().map_or_else(
+            || {
+                let ty = &self.ty;
+
+                quote!(<#ty as ::serenity_commands::BasicOption>)
+            },
+            |with| quote!(#with),
+        );
+
         let ident = self.ident();
-        let ty = &self.ty;
 
         let name = self.name();
         let description = documentation_string(&self.attrs, ident, acc);
@@ -52,7 +61,7 @@ impl Field {
         });
 
         quote! {
-            <#ty as ::serenity_commands::BasicOption>::create_option(
+            #path_base::create_option(
                 #name,
                 #description,
             )
@@ -61,7 +70,7 @@ impl Field {
         }
     }
 
-    pub fn from_options(selfs: &[Self]) -> (TokenStream, TokenStream) {
+    pub fn from_options(selfs: &[Self], autocomplete: bool) -> (TokenStream, TokenStream) {
         let match_arms = selfs.iter().enumerate().map(|(idx, field)| {
             let idx = Index::from(idx);
             let name = field.name();
@@ -76,21 +85,36 @@ impl Field {
         let tuple_inits = iter::repeat_n(quote!(::std::option::Option::None), selfs.len());
 
         let field_init = selfs.iter().enumerate().map(|(idx, field)| {
+            let path_base = field.with.as_ref().map_or_else(
+                || quote!(::serenity_commands::BasicOption),
+                |with| quote!(#with),
+            );
+
             let ident = field.ident();
             let idx = Index::from(idx);
+            
+            let constructor = if field.autocomplete.is_present() && autocomplete {
+                quote!{
+                    match acc.#idx {
+                        ::std::option::Option::Some(::serenity::all::CommandDataOptionValue::Autocomplete {
+                            value, ..
+                        }) => {
+                            let val = ::serenity::all::CommandDataOptionValue::String(
+                                ::std::clone::Clone::clone(value)
+                            );
+                            ::serenity_commands::BasicOption::from_value(::std::option::Option::Some(&val))
+                        }
+                        _ => ::serenity_commands::BasicOption::from_value(acc.#idx)
+                    }?
+                }
+            } else {
+                quote! {
+                    #path_base::from_value(acc.#idx)?
+                }
+            };
 
             quote! {
-                #ident: match acc.#idx {
-                    ::std::option::Option::Some(::serenity::all::CommandDataOptionValue::Autocomplete {
-                        value, ..
-                    }) => {
-                        let val = ::serenity::all::CommandDataOptionValue::String(
-                            ::std::clone::Clone::clone(value)
-                        );
-                        ::serenity_commands::BasicOption::from_value(::std::option::Option::Some(&val))
-                    }
-                    _ => ::serenity_commands::BasicOption::from_value(acc.#idx)
-                }?
+                #ident: #constructor
             }
         });
 
@@ -120,14 +144,15 @@ impl Field {
 
     pub fn autocomplete_variant_ident(&self) -> Ident {
         let ident = self.ident();
-        Ident::new(&ident.to_string().to_pascal_case(), ident.span())
+        let ident_s = ident.to_string();
+        Ident::new(&ident_s.strip_prefix("r#").unwrap_or(ident_s.as_str()).to_pascal_case(), ident.span())
     }
 
     pub fn autocomplete_variants(selfs: &[Self]) -> TokenStream {
         let variants = selfs
             .iter()
-            .filter(|field| field.autocomplete.is_present())
             .enumerate()
+            .filter(|(_, field)| field.autocomplete.is_present())
             .map(|(i, field)| {
                 let ident = field.autocomplete_variant_ident();
 
@@ -137,22 +162,24 @@ impl Field {
                         quote!(::std::string::String)
                     } else {
                         let ty = &field.ty;
-                        quote!(::serenity_commands::PartialOption<#ty>)
+                        quote!{
+                            ::serenity_commands::PartialOption<#ty>
+                        }
                     }
                 });
 
                 quote! {
                     #ident {
+                        #[allow(dead_code)]
                         #(#field_idents: #field_types,)*
                     }
-                }
-            });
+                }});
 
         quote!(#(#variants,)*)
     }
 
     pub fn from_autocomplete_options(selfs: &[Self]) -> TokenStream {
-        let (fold, field_inits) = Self::from_options(selfs);
+        let (fold, field_inits) = Self::from_options(selfs, true);
 
         let arms = selfs
             .iter()

@@ -107,7 +107,7 @@
 //! }
 //! ```
 
-use std::{fmt::Debug, ops::Deref};
+use std::fmt::Debug;
 
 use serenity::all::{
     AttachmentId, ChannelId, CommandData, CommandDataOption, CommandDataOptionValue,
@@ -580,6 +580,9 @@ pub enum PartialOption<T: BasicOption> {
     /// A partially parsed value, along with the error that occurred while
     /// attempting to parse it.
     Partial(T::Partial, Error),
+
+    /// A value that has not been entered yet.
+    None,
 }
 
 impl<T: BasicOption> PartialOption<T> {
@@ -587,7 +590,7 @@ impl<T: BasicOption> PartialOption<T> {
     pub fn into_value(self) -> Option<T> {
         match self {
             Self::Value(value) => Some(value),
-            Self::Partial(_, _) => None,
+            Self::Partial(_, _) | Self::None => None,
         }
     }
 
@@ -595,8 +598,8 @@ impl<T: BasicOption> PartialOption<T> {
     /// attempting to parse it from this field.
     pub fn into_partial(self) -> Option<(T::Partial, Error)> {
         match self {
-            Self::Value(_) => None,
             Self::Partial(value, error) => Some((value, error)),
+            Self::Value(_) | Self::None => None,
         }
     }
 
@@ -604,7 +607,7 @@ impl<T: BasicOption> PartialOption<T> {
     pub const fn as_value(&self) -> Option<&T> {
         match self {
             Self::Value(value) => Some(value),
-            Self::Partial(_, _) => None,
+            Self::Partial(_, _) | Self::None => None,
         }
     }
 
@@ -612,8 +615,8 @@ impl<T: BasicOption> PartialOption<T> {
     /// occurred while attempting to parse it from this field.
     pub const fn as_partial(&self) -> Option<(&T::Partial, &Error)> {
         match self {
-            Self::Value(_) => None,
             Self::Partial(value, error) => Some((value, error)),
+            Self::Value(_) | Self::None => None,
         }
     }
 
@@ -626,20 +629,38 @@ impl<T: BasicOption> PartialOption<T> {
     pub const fn is_partial(&self) -> bool {
         matches!(self, Self::Partial(_, _))
     }
+
+    /// Check if this field is empty.
+    pub const fn is_none(&self) -> bool {
+        matches!(self, Self::None)
+    }
 }
 
 impl<T: BasicOption<Partial = T>> PartialOption<T> {
-    /// Convert this field into the parsed value.
-    pub fn into_inner(self) -> T {
+    /// Convert this field into the parsed value, if it is present.
+    pub fn into_inner(self) -> Option<T> {
         match self {
-            Self::Value(value) | Self::Partial(value, _) => value,
+            Self::Value(value) | Self::Partial(value, _) => Some(value),
+            Self::None => None,
         }
     }
 
-    /// Get a reference to the parsed value.
-    pub const fn as_inner(&self) -> &T {
+    /// Get a reference to the parsed value, if it is present.
+    pub const fn as_inner(&self) -> Option<&T> {
         match self {
-            Self::Value(value) | Self::Partial(value, _) => value,
+            Self::Value(value) | Self::Partial(value, _) => Some(value),
+            Self::None => None,
+        }
+    }
+}
+
+impl<T: BasicOption> PartialOption<Option<T>> {
+    /// Flatten this field into a [`PartialOption<T>`].
+    pub fn flatten(self) -> PartialOption<T> {
+        match self {
+            Self::Value(Some(value)) => PartialOption::Value(value),
+            Self::Partial(value, error) => PartialOption::Partial(value, error),
+            Self::Value(None) | Self::None => PartialOption::None,
         }
     }
 }
@@ -655,32 +676,11 @@ impl<T: BasicOption> BasicOption for PartialOption<T> {
     }
 
     fn from_value(value: Option<&CommandDataOptionValue>) -> Result<Self> {
-        match T::from_value(value) {
-            Ok(value) => Ok(Self::Value(value)),
+        match Option::<T>::from_value(value) {
+            Ok(Some(value)) => Ok(Self::Value(value)),
+            Ok(None) => Ok(Self::None),
             Err(error) => Ok(Self::Partial(T::Partial::from_value(value)?, error)),
         }
-    }
-}
-
-impl<T, U> AsRef<U> for PartialOption<T>
-where
-    T: BasicOption<Partial = T>,
-    U: ?Sized,
-    <Self as Deref>::Target: AsRef<U>,
-{
-    fn as_ref(&self) -> &U {
-        self.deref().as_ref()
-    }
-}
-
-impl<T> Deref for PartialOption<T>
-where
-    T: BasicOption<Partial = T>,
-{
-    type Target = T;
-
-    fn deref(&self) -> &Self::Target {
-        self.as_inner()
     }
 }
 
@@ -694,6 +694,7 @@ where
             Self::Partial(value, error) => {
                 f.debug_tuple("Partial").field(value).field(error).finish()
             }
+            Self::None => f.debug_tuple("None").finish(),
         }
     }
 }
@@ -737,4 +738,29 @@ pub trait AutocompleteSubCommandOrGroup: Sized {
     ///
     /// Returns an error if the implementation fails.
     fn from_value(value: &CommandDataOptionValue) -> Result<Self>;
+}
+
+#[cfg(feature = "time")]
+mod time {
+    use serenity::all::{CommandDataOptionValue, CreateCommandOption};
+    use time::OffsetDateTime;
+
+    use crate::{BasicOption, Error, Result};
+
+    impl BasicOption for OffsetDateTime {
+        type Partial = i64;
+
+        fn create_option(
+            name: impl Into<String>,
+            description: impl Into<String>,
+        ) -> CreateCommandOption {
+            i64::create_option(name, description)
+        }
+
+        fn from_value(value: Option<&CommandDataOptionValue>) -> Result<Self> {
+            let value = i64::from_value(value)?;
+
+            Self::from_unix_timestamp(value).map_err(|e| Error::Custom(Box::new(e)))
+        }
+    }
 }

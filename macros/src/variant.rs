@@ -2,7 +2,7 @@ use darling::{
     ast::{Fields, Style},
     error::Accumulator,
     util::{Flag, SpannedValue},
-    Error, FromVariant,
+    Error, FromMeta, FromVariant,
 };
 use proc_macro2::TokenStream;
 use quote::quote;
@@ -10,9 +10,24 @@ use syn::{Attribute, Ident, LitStr};
 
 use crate::{
     field::Field,
-    utils::{documentation_string, kebab_name},
+    utils::{documentation_string, kebab_name, title_name},
     BuilderMethodList,
 };
+
+#[derive(Debug, PartialEq, FromMeta)]
+enum ContextMenuType {
+    User,
+    Message,
+}
+
+impl ContextMenuType {
+    fn command_type(&self) -> TokenStream {
+        match self {
+            Self::User => quote!(::serenity::all::CommandType::User),
+            Self::Message => quote!(::serenity:all::CommandType::Message),
+        }
+    }
+}
 
 #[derive(Debug, FromVariant)]
 #[darling(attributes(command), forward_attrs(doc))]
@@ -24,19 +39,24 @@ pub struct Variant {
     name: Option<SpannedValue<String>>,
     builder: Option<BuilderMethodList>,
     pub autocomplete: Flag,
+    context_menu: Option<SpannedValue<ContextMenuType>>,
 }
 
 impl Variant {
-    pub fn name(&self) -> LitStr {
+    pub fn name_kebab(&self) -> LitStr {
         kebab_name(&self.ident, self.name.as_ref())
     }
 
-    pub fn create_command(&self, acc: &mut Accumulator) -> TokenStream {
-        let name = self.name();
-        let description = documentation_string(&self.attrs, &self.ident, acc);
+    pub fn name_title(&self) -> LitStr {
+        title_name(&self.ident, self.name.as_ref())
+    }
 
+    pub fn create_command(&self, acc: &mut Accumulator) -> TokenStream {
         let body = match self.fields.style {
             Style::Struct => {
+                let name = self.name_kebab();
+                let description = documentation_string(&self.attrs, &self.ident, acc);
+
                 let fields = self.fields.iter().map(|field| field.create_option(acc));
 
                 quote! {
@@ -46,6 +66,9 @@ impl Variant {
                 }
             }
             Style::Tuple => {
+                let name = self.name_kebab();
+                let description = documentation_string(&self.attrs, &self.ident, acc);
+
                 let field = self
                     .fields
                     .fields
@@ -57,12 +80,26 @@ impl Variant {
                     <#ty as ::serenity_commands::Command>::create_command(#name, #description)
                 }
             }
-            Style::Unit => {
-                quote! {
-                    ::serenity::all::CreateCommand::new(#name)
-                        .description(#description)
-                }
-            }
+            Style::Unit => self.context_menu.as_ref().map_or_else(
+                || {
+                    let name = self.name_kebab();
+                    let description = documentation_string(&self.attrs, &self.ident, acc);
+
+                    quote! {
+                        ::serenity::all::CreateCommand::new(#name)
+                            .description(#description)
+                    }
+                },
+                |ctx_menu| {
+                    let name = self.name_title();
+                    let ctx_type = ctx_menu.command_type();
+
+                    quote! {
+                        ::serenity::all::CreateCommand::new(#name)
+                            .kind(#ctx_type)
+                    }
+                },
+            ),
         };
 
         let builder_methods = &self.builder;
@@ -74,7 +111,7 @@ impl Variant {
     }
 
     pub fn create_sub_command_group(&self, acc: &mut Accumulator) -> TokenStream {
-        let name = self.name();
+        let name = self.name_kebab();
         let description = documentation_string(&self.attrs, &self.ident, acc);
 
         let body = match self.fields.style {
@@ -125,7 +162,7 @@ impl Variant {
     }
 
     pub fn create_sub_command(&self, acc: &mut Accumulator) -> TokenStream {
-        let name = self.name();
+        let name = self.name_kebab();
         let description = documentation_string(&self.attrs, &self.ident, acc);
 
         let body = match self.fields.style {
@@ -150,10 +187,17 @@ impl Variant {
                 let ty = &field.ty;
 
                 quote! {
-                    <#ty as ::serenity_commands::SubCommand>::create_option(
-                        #name,
-                        #description,
-                    )
+                    {
+                        const _: fn() = || {
+                            fn assert_subcommand<T: ::serenity_commands::SubCommand>() {}
+                            assert_subcommand::<#ty>();
+                        };
+
+                        <#ty as ::serenity_commands::SubCommandGroup>::create_option(
+                            #name,
+                            #description,
+                        )
+                    }
                 }
             }
             Style::Unit => {
@@ -181,7 +225,7 @@ impl Variant {
 
         let match_body = match self.fields.style {
             Style::Struct => {
-                let (fold, field_inits) = Field::from_options(&self.fields.fields);
+                let (fold, field_inits) = Field::from_options(&self.fields.fields, false);
 
                 quote! {
                     #fold
@@ -212,7 +256,7 @@ impl Variant {
             }
         };
 
-        let name = self.name();
+        let name = self.name_kebab();
 
         quote! {
             #name => { #match_body }
@@ -225,7 +269,7 @@ impl Variant {
 
         let match_body = match self.fields.style {
             Style::Struct => {
-                let (fold, field_inits) = Field::from_options(&self.fields.fields);
+                let (fold, field_inits) = Field::from_options(&self.fields.fields, false);
 
                 quote! {
                     let ::serenity::all::CommandDataOption {
@@ -266,7 +310,7 @@ impl Variant {
             }
         };
 
-        let name = self.name();
+        let name = self.name_kebab();
 
         quote! {
             #name => { #match_body }
@@ -279,7 +323,7 @@ impl Variant {
 
         let match_body = match self.fields.style {
             Style::Struct => {
-                let (fold, field_inits) = Field::from_options(&self.fields.fields);
+                let (fold, field_inits) = Field::from_options(&self.fields.fields, false);
 
                 quote! {
                     let ::serenity::all::CommandDataOption {
@@ -308,11 +352,15 @@ impl Variant {
                 let ty = &field.ty;
 
                 quote! {
-                    <
-                        <
-                            #ty as ::serenity_commands::SubCommand
-                        > as ::serenity_commands::SubCommandGroup
-                    >::from_value(&option.value).map(Self::#ident)
+                    {
+                        const _: fn() = || {
+                            fn assert_subcommand<T: ::serenity_commands::SubCommand>() {}
+                            assert_subcommand::<#ty>();
+                        };
+
+                        <#ty as ::serenity_commands::SubCommandGroup>::from_value(&option.value)
+                            .map(Self::#ident)
+                    }
                 }
             }
             Style::Unit => {
@@ -322,7 +370,7 @@ impl Variant {
             }
         };
 
-        let name = self.name();
+        let name = self.name_kebab();
 
         quote! {
             #name => { #match_body }
@@ -356,7 +404,7 @@ impl Variant {
                     .first()
                     .expect("`Args` should only accept tuple `enum` variants with one field");
                 let ty = &field.ty;
-                let name = self.name();
+                let name = self.name_kebab();
 
                 Some((
                     quote!(
@@ -410,7 +458,7 @@ impl Variant {
                     .first()
                     .expect("`Args` should only accept tuple `enum` variants with one field");
                 let ty = &field.ty;
-                let name = self.name();
+                let name = self.name_kebab();
 
                 Some((
                     quote!(

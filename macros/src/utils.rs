@@ -1,24 +1,20 @@
 use darling::{error::Accumulator, util::SpannedValue, Error};
 use heck::{ToKebabCase, ToTitleCase};
-use proc_macro2::Span;
-use syn::{spanned::Spanned, Attribute, Expr, ExprLit, Ident, Lit, LitStr, Meta, MetaNameValue};
+use proc_macro2::TokenStream;
+use quote::quote;
+use syn::{spanned::Spanned, Attribute, Ident, LitStr, Meta, MetaNameValue};
 
 pub fn documentation_string(
     attrs: &[Attribute],
     spanned: &impl Spanned,
     acc: &mut Accumulator,
-) -> LitStr {
+) -> TokenStream {
     let mut doc_comments = attrs
         .iter()
         .filter_map(|attr| match &attr.meta {
-            Meta::NameValue(MetaNameValue {
-                path,
-                value:
-                    Expr::Lit(ExprLit {
-                        lit: Lit::Str(s), ..
-                    }),
-                ..
-            }) if path.is_ident("doc") => Some((s.span(), s.value())),
+            Meta::NameValue(MetaNameValue { path, value, .. }) if path.is_ident("doc") => {
+                Some(value)
+            }
             _ => None,
         })
         .peekable();
@@ -29,24 +25,20 @@ pub fn documentation_string(
                 .with_span(spanned),
         )
     } else {
-        let (span, s) = doc_comments.fold(
-            (Span::call_site(), String::new()),
-            |(span, mut acc), (_, s)| {
-                if !acc.is_empty() {
-                    acc.push(' ');
-                }
+        let parts = doc_comments.fold(TokenStream::new(), |mut acc, e| {
+            if !acc.is_empty() {
+                acc.extend(quote!(" ",));
+            }
 
-                acc.push_str(s.trim());
+            acc.extend(quote!(#e,));
 
-                (span, acc)
-            },
-        );
+            acc
+        });
 
-        Ok(LitStr::new(&s, span))
+        Ok(quote!(::std::concat!(#parts)))
     };
 
-    acc.handle(res)
-        .unwrap_or_else(|| LitStr::new("", Span::call_site()))
+    acc.handle(res).unwrap_or_else(|| quote!(""))
 }
 
 pub trait IdentExt {

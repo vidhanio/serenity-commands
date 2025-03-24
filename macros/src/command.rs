@@ -91,7 +91,7 @@ impl Args {
         let body = match &self.data {
             Data::Struct(fields) => match fields.style {
                 Style::Struct => {
-                    let (fold, field_inits) = Field::from_options(&fields.fields);
+                    let (fold, field_inits) = Field::from_options(&fields.fields, false);
 
                     quote! {
                         #fold

@@ -88,7 +88,7 @@ impl Args {
 
         let (variants, arms) = variants
             .into_iter()
-            .filter_map(|variant| variant.from_autocomplete_command_options(acc))
+            .filter_map(|variant| variant.from_autocomplete_subcommand_or_group_value(acc))
             .unzip::<_, _, Vec<_>, Vec<_>>();
 
         if variants.is_empty() {

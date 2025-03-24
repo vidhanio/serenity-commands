@@ -53,7 +53,10 @@ impl GetWordIndexCommandAutocomplete {
         CreateAutocompleteResponse::new().set_choices(
             WORDS
                 .lines()
-                .filter(|w| w.starts_with(&*word) && w.ends_with(&suffix))
+                .filter(|w| {
+                    w.starts_with(&word)
+                        && w.ends_with(&suffix.as_inner().cloned().unwrap_or_default())
+                })
                 .map(|w| AutocompleteChoice::new(w, w))
                 .take(25)
                 .collect(),

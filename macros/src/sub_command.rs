@@ -80,7 +80,7 @@ impl Args {
 
         let body = match fields.style {
             Style::Struct => {
-                let (fold, field_inits) = Field::from_options(&fields.fields);
+                let (fold, field_inits) = Field::from_options(&fields.fields, false);
 
                 quote! {
                     let ::serenity::all::CommandDataOptionValue::SubCommand(options) = value else {
@@ -183,8 +183,9 @@ impl Args {
                     },
                     quote! {
                         <
-                            ::serenity_commands::Autocomplete<#ty> as ::serenity_commands::AutocompleteCommand
-                        >::from_command(options).map(Self)
+                            ::serenity_commands::Autocomplete<#ty> as ::serenity_commands::AutocompleteSubCommandOrGroup
+                        >::from_value(value)
+                            .map(self)
                     },
                 )
             }

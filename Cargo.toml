@@ -19,6 +19,8 @@ serenity-commands-macros.workspace = true
 
 serenity.workspace = true
 thiserror = "2"
+time = { version = "0.3", optional = true }
+
 
 [dev-dependencies]
 serenity = { workspace = true, default-features = true }
@@ -26,6 +28,9 @@ tokio = { version = "1", default-features = false, features = [
     "macros",
     "rt-multi-thread",
 ] }
+
+[features]
+time = ["dep:time"]
 
 
 [lints]
@@ -40,15 +45,15 @@ members = [".", "macros"]
     [workspace.package]
     authors = ["Vidhan Bhatt <me@vidhan.io>"]
     description = "A library for creating/parsing Serenity slash commands."
-    edition = "2021"
+    edition = "2024"
     homepage = "https://github.com/vidhanio/serenity-commands"
     license = "MIT"
     readme = "README.md"
     repository = "https://github.com/vidhanio/serenity-commands"
-    version = "0.7.0"
+    version = "0.8.0"
 
     [workspace.dependencies]
-    serenity-commands-macros = { version = "0.7", path = "macros" }
+    serenity-commands-macros = { version = "0.8", path = "macros" }
 
     serenity = { version = "0.12", default-features = false, features = [
         "builder",
